@@ -9,47 +9,86 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
 # ------------------ Model Definition ------------------
 class MusicGenreCNN(nn.Module):
     def __init__(self, num_classes=10):
         super(MusicGenreCNN, self).__init__()
-        self.batch_norm0 = nn.BatchNorm2d(1)
-        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1)
-        self.batch_norm1 = nn.BatchNorm2d(64)
-        self.batch_norm2 = nn.BatchNorm2d(128)
-        self.elu1 = nn.ELU(64)
-        self.pool = nn.MaxPool2d(kernel_size=2)
-        self.dropout = nn.Dropout(0.3)
-        self.conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
         
-       
-        self.fc1 = nn.Linear(128 * 16 * 16, 256)
+        self.bn_0_freq = nn.BatchNorm2d(1)  # input: [B, 1, 300, 300]
+
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.pool1 = nn.MaxPool2d(2)
+        self.drop1 = nn.Dropout(0.25)
+
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(128)
+        self.pool2 = nn.MaxPool2d(2)
+        self.drop2 = nn.Dropout(0.25)
+
+        self.conv3 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
+        self.pool3 = nn.MaxPool2d(2)
+        self.drop3 = nn.Dropout(0.25)
+
+        self.conv4 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
+        self.bn4 = nn.BatchNorm2d(128)
+
+        self.fc1 = nn.Linear(1024, 256)
         self.fc2 = nn.Linear(256, num_classes)
+        self.pool4 = nn.MaxPool2d(3)  # from 37x37 → 12x12
+        self.drop4 = nn.Dropout(0.25)
+
+        self.conv5 = nn.Conv2d(128, 64, kernel_size=3, padding=1)
+        self.bn5 = nn.BatchNorm2d(64)
+        self.pool5 = nn.MaxPool2d(3)  # from 12x12 → 4x4
+        self.drop5 = nn.Dropout(0.25)
+
 
     def forward(self, x):
-        x = self.pool(F.relu(self.conv1(x)))
-        x = self.pool(F.relu(self.conv2(x)))
-        x = self.pool(F.relu(self.conv3(x)))
-        x = self.dropout(x)
-        x = x.view(-1, 128 * 16 * 16)
-        x = F.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
+    
+        x = self.bn_0_freq(x)
+        x = F.elu(self.bn1(self.conv1(x)))
+        x = self.pool1(x)
+        x = self.drop1(x)
+
+        x = F.elu(self.bn2(self.conv2(x)))
+        x = self.pool2(x)
+        x = self.drop2(x)
+
+        x = F.elu(self.bn3(self.conv3(x)))
+        x = self.pool3(x)
+        x = self.drop3(x)
+
+        x = F.elu(self.bn4(self.conv4(x)))
+        x = self.pool4(x)
+        x = self.drop4(x)
+
+        x = F.elu(self.bn5(self.conv5(x)))
+        x = self.pool5(x)
+        x = self.drop5(x)
+        #print(x.shape) 
+        x = x.view(x.size(0), -1)  
+        #print(x.shape)     # Flatten to [B, 51200]
+        x = F.relu(self.fc1(x)) 
+        #print(x.shape)      # [B, 256]
+        x = self.fc2(x) 
         return x
 
 # ------------------ Data Augmentation ------------------
 def augment_audio(y, sr):
-    y = librosa.effects.pitch_shift(y, sr, n_steps=random.uniform(-1, 1))
-    y = librosa.effects.time_stretch(y, rate=random.uniform(0.9, 1.1))
+    #y = librosa.effects.pitch_shift(y, sr, n_steps=random.uniform(-1, 1))
+    y = librosa.effects.pitch_shift(y, sr=sr, n_steps=random.choice([1,-1]))
+    #y = librosa.effects.time_stretch(y, rate=random.uniform(0.9, 1.1))
     noise = np.random.randn(len(y))
     y = y + 0.005 * noise
     return y
 
 # ------------------ Dataset ------------------
 class GenreDataset(Dataset):
-    def __init__(self, file_paths, labels, sr=22050, n_mels=128, augment=False):
+    def __init__(self, file_paths, labels, sr=22050, n_mels=300, augment=False):
         self.file_paths = file_paths
         self.labels = labels
         self.sr = sr
@@ -68,17 +107,39 @@ class GenreDataset(Dataset):
                 y = augment_audio(y, sr)
             mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=self.n_mels)
             mel_db = librosa.power_to_db(mel, ref=np.max)
-            mel_db = librosa.util.fix_length(mel_db, size=128, axis=1)
+            mel_db = librosa.util.fix_length(mel_db, size=300, axis=1)
             mel_tensor = torch.tensor(mel_db).unsqueeze(0).float() 
             #print(f"Mel shape before tensor: {mel_db.shape}")  
             return mel_tensor, label # [1, 128, 128]
         except Exception as e:
-            print(f"problems with the path {path}")
-            print(e)
-            dummy_tensor = torch.zeros((1, 128, 128), dtype=torch.float32)
+            # print(f"problems with the path {path}")
+            # print(e)
+            dummy_tensor = torch.zeros((1, 300, 300), dtype=torch.float32)
             return dummy_tensor, -1 
 
-        
+@torch.no_grad()
+def evaluate_model(model, dataloader, criterion, device):
+    model.eval()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+    for inputs, labels in dataloader:
+        mask = labels != -1
+        if not mask.any():
+            continue
+        inputs, labels = inputs[mask].to(device), labels[mask].to(device)
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+
+        running_loss += loss.item()*inputs.size(0)
+        _, preds = torch.max(outputs,1)
+        correct += (preds == labels).sum().item()
+        total += labels.size(0)
+    epoch_loss = running_loss / total
+    epoch_acc = correct / total
+    return epoch_loss, epoch_acc
+
+
 
 # ------------------ Training Utilities ------------------
 def train_model(model, dataloader, criterion, optimizer, device):
@@ -141,6 +202,12 @@ criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 # Training loop
-for epoch in range(10):
+num_epochs = 50
+for epoch in tqdm(range(num_epochs)):
     train_loss, train_acc = train_model(model, train_loader, criterion, optimizer, device)
-    print(f"Epoch {epoch+1}/10 - Loss: {train_loss:.4f}, Accuracy: {train_acc:.4f}")
+    val_loss, val_acc = evaluate_model(model, val_loader, criterion, device)
+
+    print(f"Epoch {epoch+1}/{num_epochs} "
+          f"| Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} "
+          f"| Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
+    #print(f"Epoch {epoch+1}/10 - Loss: {train_loss:.4f}, Accuracy: {train_acc:.4f}")
