@@ -208,6 +208,7 @@ def expand(file_list, label_list):
 
 # ------------------ Main Script ------------------
 # Example file loading -- replace with your actual dataset structure
+#AUDIO_DIR = "/home/ui556004/data/gtzan_old/"
 AUDIO_DIR = r"C:\Polina\master\thesis\beat_this\data\gtzan_old"
 all_files = []
 labels = []
