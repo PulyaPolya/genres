@@ -48,17 +48,17 @@ class MusicGenreCNN(nn.Module):
         self.conv1 = nn.Conv2d(1, 64, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(64)
         self.pool1 = nn.MaxPool2d(2)
-        self.drop1 = nn.Dropout(0.25)
+        self.drop1 = nn.Dropout(0.3)
 
         self.conv2 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
         self.bn2 = nn.BatchNorm2d(128)
         self.pool2 = nn.MaxPool2d(2)
-        self.drop2 = nn.Dropout(0.25)
+        self.drop2 = nn.Dropout(0.3)
 
         self.conv3 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
         self.bn3 = nn.BatchNorm2d(128)
         self.pool3 = nn.MaxPool2d(2)
-        self.drop3 = nn.Dropout(0.25)
+        self.drop3 = nn.Dropout(0.3)
 
         self.conv4 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
         self.bn4 = nn.BatchNorm2d(128)
@@ -66,7 +66,7 @@ class MusicGenreCNN(nn.Module):
         self.fc1 = nn.Linear(1024, 256)
         self.fc2 = nn.Linear(1024, num_classes)
         self.pool4 = nn.MaxPool2d(3)  # from 37x37 → 12x12
-        self.drop4 = nn.Dropout(0.25)
+        self.drop4 = nn.Dropout(0.4)
 
         self.conv5 = nn.Conv2d(128, 64, kernel_size=3, padding=1)
         self.bn5 = nn.BatchNorm2d(64)
@@ -98,19 +98,18 @@ class MusicGenreCNN(nn.Module):
         x = self.drop5(x)
         #print(x.shape) 
         x = x.view(x.size(0), -1)  
-        #print(x.shape)     # Flatten to [B, 51200]
-        #x = F.relu(self.fc1(x)) 
-        #print(x.shape)      # [B, 256]
         x = self.fc2(x) 
         return x
 
 # ------------------ Data Augmentation ------------------
 def augment_audio(y, sr):
     #y = librosa.effects.pitch_shift(y, sr, n_steps=random.uniform(-1, 1))
-    y = librosa.effects.pitch_shift(y, sr=sr, n_steps=random.choice([1,-1, 0]))
+    if random.random()< 0.5:
+        y = librosa.effects.pitch_shift(y, sr=sr, n_steps=random.choice([1,-1]))
+    if random.random() < 0.3:
     #y = librosa.effects.time_stretch(y, rate=random.uniform(0.9, 1.1))
-    noise = np.random.randn(len(y))
-    #y = y + 0.03 * noise
+        noise = np.random.randn(len(y))
+        y = y + 0.03 * noise
     return y
 
 
@@ -245,7 +244,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 # Training loop
 early_stopping = EarlyStopping(patience = 7, min_delta= 0.001, mode = 'max')
-num_epochs = 200
+num_epochs = 100
 for epoch in tqdm(range(num_epochs)):
     train_loss, train_acc = train_model(model, train_loader, criterion, optimizer, device)
     val_loss, val_acc = evaluate_model(model, val_loader, criterion, device)
@@ -254,6 +253,7 @@ for epoch in tqdm(range(num_epochs)):
           f"| Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} "
           f"| Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
     early_stopping(val_acc, model)
+    print(f"best val accuracy so far {early_stopping.best_score}")
     if early_stopping.early_stop:
         print("⏹️ Early stopping triggered. Restoring best model.")
         model.load_state_dict(early_stopping.best_model_state)
