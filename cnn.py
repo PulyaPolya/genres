@@ -12,6 +12,33 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 # ------------------ Model Definition ------------------
+
+class EarlyStopping:
+    def __init__(self, patience = 5,min_delta = 0, mode = 'min'):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+        self.mode = mode  # 'min' for loss, 'max' for accuracy
+        self.best_model_state = None
+    
+    def __call__(self, score, model):
+        if self.best_score is None:
+            self.best_score = score
+            self.best_model_state = model.state_dict()
+        elif((self.mode == 'min' and score < self.best_score - self.min_delta)
+            or (self.mode == 'max' and score > self.best_score + self.min_delta)):
+            self.best_score = score
+            self.best_model_state = model.state_dict()
+            self.counter = 0
+        else:
+            self.counter += 1
+            print(f" No improvement. EarlyStopping counter: {self.counter}/{self.patience}")
+            if self.counter >= self.patience:
+                self.early_stop = True
+
+
 class MusicGenreCNN(nn.Module):
     def __init__(self, num_classes=10):
         super(MusicGenreCNN, self).__init__()
@@ -37,7 +64,7 @@ class MusicGenreCNN(nn.Module):
         self.bn4 = nn.BatchNorm2d(128)
 
         self.fc1 = nn.Linear(1024, 256)
-        self.fc2 = nn.Linear(256, num_classes)
+        self.fc2 = nn.Linear(1024, num_classes)
         self.pool4 = nn.MaxPool2d(3)  # from 37x37 → 12x12
         self.drop4 = nn.Dropout(0.25)
 
@@ -72,7 +99,7 @@ class MusicGenreCNN(nn.Module):
         #print(x.shape) 
         x = x.view(x.size(0), -1)  
         #print(x.shape)     # Flatten to [B, 51200]
-        x = F.relu(self.fc1(x)) 
+        #x = F.relu(self.fc1(x)) 
         #print(x.shape)      # [B, 256]
         x = self.fc2(x) 
         return x
@@ -80,10 +107,10 @@ class MusicGenreCNN(nn.Module):
 # ------------------ Data Augmentation ------------------
 def augment_audio(y, sr):
     #y = librosa.effects.pitch_shift(y, sr, n_steps=random.uniform(-1, 1))
-    y = librosa.effects.pitch_shift(y, sr=sr, n_steps=random.choice([1,-1]))
+    y = librosa.effects.pitch_shift(y, sr=sr, n_steps=random.choice([1,-1, 0]))
     #y = librosa.effects.time_stretch(y, rate=random.uniform(0.9, 1.1))
     noise = np.random.randn(len(y))
-    y = y + 0.005 * noise
+    #y = y + 0.03 * noise
     return y
 
 # ------------------ Dataset ------------------
@@ -188,9 +215,9 @@ train_files, val_files, train_labels, val_labels = train_test_split(
     all_files, encoded_labels, test_size=0.2, stratify=encoded_labels, random_state=42)
 
 # Create datasets and dataloaders
-train_dataset = GenreDataset(train_files, train_labels, augment=False)
+train_dataset = GenreDataset(train_files, train_labels, augment=True)
 val_dataset = GenreDataset(val_files, val_labels, augment=False)
-train_loader = DataLoader(train_dataset, batch_size=16, shuffle=False)
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=16)
 
 # Model training setup
@@ -202,7 +229,8 @@ criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 # Training loop
-num_epochs = 50
+early_stopping = EarlyStopping(patience = 7, min_delta= 0.001, mode = 'max')
+num_epochs = 200
 for epoch in tqdm(range(num_epochs)):
     train_loss, train_acc = train_model(model, train_loader, criterion, optimizer, device)
     val_loss, val_acc = evaluate_model(model, val_loader, criterion, device)
@@ -210,4 +238,9 @@ for epoch in tqdm(range(num_epochs)):
     print(f"Epoch {epoch+1}/{num_epochs} "
           f"| Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} "
           f"| Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
+    early_stopping(val_acc, model)
+    if early_stopping.early_stop:
+        print("⏹️ Early stopping triggered. Restoring best model.")
+        model.load_state_dict(early_stopping.best_model_state)
+        break
     #print(f"Epoch {epoch+1}/10 - Loss: {train_loss:.4f}, Accuracy: {train_acc:.4f}")
