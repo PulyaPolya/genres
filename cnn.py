@@ -208,54 +208,55 @@ def expand(file_list, label_list):
 # ------------------ Main Script ------------------
 # Example file loading -- replace with your actual dataset structure
 #AUDIO_DIR = "/home/ui556004/data/gtzan_old/"
-AUDIO_DIR = r"C:\Polina\master\thesis\beat_this\data\gtzan_old"
-all_files = []
-labels = []
-for genre in os.listdir(AUDIO_DIR):
-    genre_path = os.path.join(AUDIO_DIR, genre)
-    for file in os.listdir(genre_path):
-        if file.endswith('.wav'):
-            all_files.append(os.path.join(genre_path, file))
-            labels.append(genre)
+if __name__== "__main__":
+    AUDIO_DIR = r"C:\Polina\master\thesis\beat_this\data\gtzan_old"
+    all_files = []
+    labels = []
+    for genre in os.listdir(AUDIO_DIR):
+        genre_path = os.path.join(AUDIO_DIR, genre)
+        for file in os.listdir(genre_path):
+            if file.endswith('.wav'):
+                all_files.append(os.path.join(genre_path, file))
+                labels.append(genre)
 
-# Encode labels
-le = LabelEncoder()
-encoded_labels = le.fit_transform(labels)
+    # Encode labels
+    le = LabelEncoder()
+    encoded_labels = le.fit_transform(labels)
 
-# Train-test split
-train_files, val_files, train_labels, val_labels = train_test_split(
-    all_files, encoded_labels, test_size=0.2, stratify=encoded_labels, random_state=42)
+    # Train-test split
+    train_files, val_files, train_labels, val_labels = train_test_split(
+        all_files, encoded_labels, test_size=0.2, stratify=encoded_labels, random_state=42)
 
-train_paths, train_labels, train_starts = expand(train_files, train_labels)
-val_paths, val_labels, val_starts = expand(val_files, val_labels)
-# Create datasets and dataloaders
-train_dataset = GenreDataset(train_paths, train_labels, train_starts, augment=True)
-val_dataset = GenreDataset(val_paths, val_labels,val_starts, augment=False)
-train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=16)
+    train_paths, train_labels, train_starts = expand(train_files, train_labels)
+    val_paths, val_labels, val_starts = expand(val_files, val_labels)
+    # Create datasets and dataloaders
+    train_dataset = GenreDataset(train_paths, train_labels, train_starts, augment=True)
+    val_dataset = GenreDataset(val_paths, val_labels,val_starts, augment=False)
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=16, num_workers=4, pin_memory=True)
 
-# Model training setup
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # Model training setup
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-model = MusicGenreCNN(num_classes=len(le.classes_)).to(device)
-print(model)
-criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    model = MusicGenreCNN(num_classes=len(le.classes_)).to(device)
+    print(model)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-# Training loop
-early_stopping = EarlyStopping(patience = 7, min_delta= 0.001, mode = 'max')
-num_epochs = 100
-for epoch in tqdm(range(num_epochs)):
-    train_loss, train_acc = train_model(model, train_loader, criterion, optimizer, device)
-    val_loss, val_acc = evaluate_model(model, val_loader, criterion, device)
+    # Training loop
+    early_stopping = EarlyStopping(patience = 7, min_delta= 0.001, mode = 'max')
+    num_epochs = 100
+    for epoch in tqdm(range(num_epochs)):
+        train_loss, train_acc = train_model(model, train_loader, criterion, optimizer, device)
+        val_loss, val_acc = evaluate_model(model, val_loader, criterion, device)
 
-    print(f"Epoch {epoch+1}/{num_epochs} "
-          f"| Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} "
-          f"| Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
-    early_stopping(val_acc, model)
-    print(f"best val accuracy so far {early_stopping.best_score}")
-    if early_stopping.early_stop:
-        print("⏹️ Early stopping triggered. Restoring best model.")
-        model.load_state_dict(early_stopping.best_model_state)
-        break
-    #print(f"Epoch {epoch+1}/10 - Loss: {train_loss:.4f}, Accuracy: {train_acc:.4f}")
+        print(f"Epoch {epoch+1}/{num_epochs} "
+            f"| Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} "
+            f"| Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
+        early_stopping(val_acc, model)
+        print(f"best val accuracy so far {early_stopping.best_score}")
+        if early_stopping.early_stop:
+            print("⏹️ Early stopping triggered. Restoring best model.")
+            model.load_state_dict(early_stopping.best_model_state)
+            break
+        #print(f"Epoch {epoch+1}/10 - Loss: {train_loss:.4f}, Accuracy: {train_acc:.4f}")
