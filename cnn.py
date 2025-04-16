@@ -113,11 +113,13 @@ def augment_audio(y, sr):
     #y = y + 0.03 * noise
     return y
 
+
 # ------------------ Dataset ------------------
 class GenreDataset(Dataset):
-    def __init__(self, file_paths, labels, sr=22050, n_mels=300, augment=False):
+    def __init__(self, file_paths, labels, segment_starts, sr=22050, n_mels=300, augment=False):
         self.file_paths = file_paths
         self.labels = labels
+        self.segment_starts = segment_starts
         self.sr = sr
         self.n_mels = n_mels
         self.augment = augment
@@ -128,8 +130,9 @@ class GenreDataset(Dataset):
     def __getitem__(self, idx):
         path = self.file_paths[idx]
         label = self.labels[idx]
+        offset = self.segment_starts[idx]
         try:
-            y, sr = librosa.load(path, sr=self.sr, duration=30.0)
+            y, sr = librosa.load(path, sr=self.sr,offset=offset, duration=15.0)
             if self.augment:
                 y = augment_audio(y, sr)
             mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=self.n_mels)
@@ -194,6 +197,15 @@ def train_model(model, dataloader, criterion, optimizer, device):
     epoch_acc = correct / total
     return epoch_loss, epoch_acc
 
+def expand(file_list, label_list):
+    paths, labels, starts = [], [], []
+    for path, label in zip(file_list, label_list):
+        for start in [0.0, 15.0]:
+            paths.append(path)
+            labels.append(label)
+            starts.append(start)
+    return paths, labels, starts
+
 # ------------------ Main Script ------------------
 # Example file loading -- replace with your actual dataset structure
 AUDIO_DIR = r"C:\Polina\master\thesis\beat_this\data\gtzan_old"
@@ -214,9 +226,11 @@ encoded_labels = le.fit_transform(labels)
 train_files, val_files, train_labels, val_labels = train_test_split(
     all_files, encoded_labels, test_size=0.2, stratify=encoded_labels, random_state=42)
 
+train_paths, train_labels, train_starts = expand(train_files, train_labels)
+val_paths, val_labels, val_starts = expand(val_files, val_labels)
 # Create datasets and dataloaders
-train_dataset = GenreDataset(train_files, train_labels, augment=True)
-val_dataset = GenreDataset(val_files, val_labels, augment=False)
+train_dataset = GenreDataset(train_paths, train_labels, train_starts, augment=True)
+val_dataset = GenreDataset(val_paths, val_labels,val_starts, augment=False)
 train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=16)
 
