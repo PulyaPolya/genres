@@ -10,6 +10,8 @@ from torchvision import transforms
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
+import wandb
+import logging
 
 # ------------------ Model Definition ------------------
 
@@ -204,6 +206,16 @@ def expand(file_list, label_list):
             labels.append(label)
             starts.append(start)
     return paths, labels, starts
+wandb_logger = logging.getLogger("wandb")
+wandb_logger.setLevel(logging.ERROR)
+wandb.init(project="music-genre-classification", name="gtzan-cnn", config={
+    "epochs": 100,
+    "batch_size": 32,
+    "lr": 0.001,
+    "model": "MusicGenreCNN",
+    "augmentation": True,
+    "num_mels": 300,
+})
 
 # ------------------ Main Script ------------------
 # Example file loading -- replace with your actual dataset structure
@@ -232,8 +244,8 @@ if __name__== "__main__":
     # Create datasets and dataloaders
     train_dataset = GenreDataset(train_paths, train_labels, train_starts, augment=True)
     val_dataset = GenreDataset(val_paths, val_labels,val_starts, augment=False)
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=16, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=32)
 
     # Model training setup
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -244,11 +256,18 @@ if __name__== "__main__":
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
     # Training loop
-    early_stopping = EarlyStopping(patience = 7, min_delta= 0.001, mode = 'max')
+    early_stopping = EarlyStopping(patience = 10, min_delta= 0.001, mode = 'max')
     num_epochs = 100
     for epoch in tqdm(range(num_epochs)):
         train_loss, train_acc = train_model(model, train_loader, criterion, optimizer, device)
         val_loss, val_acc = evaluate_model(model, val_loader, criterion, device)
+        wandb.log({
+            "Train Loss": train_loss,
+            "Train Accuracy": train_acc,
+            "Val Loss": val_loss,
+            "Val Accuracy": val_acc,
+            "Epoch": epoch + 1
+        })
 
         print(f"Epoch {epoch+1}/{num_epochs} "
             f"| Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} "
@@ -260,3 +279,4 @@ if __name__== "__main__":
             model.load_state_dict(early_stopping.best_model_state)
             break
         #print(f"Epoch {epoch+1}/10 - Loss: {train_loss:.4f}, Accuracy: {train_acc:.4f}")
+    wandb.finish()
