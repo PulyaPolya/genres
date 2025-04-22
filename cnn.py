@@ -12,6 +12,8 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 import wandb
 import logging
+from os import listdir
+from os.path import isfile, join
 
 # ------------------ Model Definition ------------------
 
@@ -60,20 +62,21 @@ class MusicGenreCNN(nn.Module):
         self.conv3 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
         self.bn3 = nn.BatchNorm2d(128)
         self.pool3 = nn.MaxPool2d(2)
-        self.drop3 = nn.Dropout(0.3)
+        self.drop3 = nn.Dropout(0.4)
 
         self.conv4 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
         self.bn4 = nn.BatchNorm2d(128)
 
         self.fc1 = nn.Linear(1024, 256)
-        self.fc2 = nn.Linear(1024, num_classes)
+        self.fc2 = nn.Linear(640, num_classes)
         self.pool4 = nn.MaxPool2d(3)  # from 37x37 → 12x12
-        self.drop4 = nn.Dropout(0.4)
+        self.drop4 = nn.Dropout(0.5)
 
         self.conv5 = nn.Conv2d(128, 64, kernel_size=3, padding=1)
         self.bn5 = nn.BatchNorm2d(64)
         self.pool5 = nn.MaxPool2d(3)  # from 12x12 → 4x4
-        self.drop5 = nn.Dropout(0.25)
+        self.drop5 = nn.Dropout(0.5)
+        self.num_classes = 10
 
 
     def forward(self, x):
@@ -101,6 +104,7 @@ class MusicGenreCNN(nn.Module):
         #print(x.shape) 
         x = x.view(x.size(0), -1)  
         x = self.fc2(x) 
+        #x = nn.Linear(x.shape[1], self.num_classes) (x)
         return x
 
 # ------------------ Data Augmentation ------------------
@@ -116,38 +120,105 @@ def augment_audio(y, sr):
 
 
 # ------------------ Dataset ------------------
+# class GenreDataset(Dataset):
+#     def __init__(self, file_paths, labels, segment_starts, sr=22050, n_mels=300, augment=False):
+#         self.file_paths = file_paths
+#         self.labels = labels
+#         self.segment_starts = segment_starts
+#         self.sr = sr
+#         self.n_mels = n_mels
+#         self.augment = augment
+
+#     def __len__(self):
+#         return len(self.file_paths)
+
+#     def __getitem__(self, idx):
+#         path = self.file_paths[idx]
+#         label = self.labels[idx]
+#         offset = self.segment_starts[idx]
+#         try:
+#             y, sr = librosa.load(path, sr=self.sr,offset=offset, duration=15.0)
+#             if self.augment:
+#                 y = augment_audio(y, sr)
+#             mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=self.n_mels)
+#             mel_db = librosa.power_to_db(mel, ref=np.max)
+#             mel_db = librosa.util.fix_length(mel_db, size=300, axis=1)
+#             mel_tensor = torch.tensor(mel_db).unsqueeze(0).float() 
+#             mel_tensor = (mel_tensor - mel_tensor.mean()) / (mel_tensor.std() + 1e-6)
+#             #print(f"Mel shape before tensor: {mel_db.shape}")  
+#             return mel_tensor, label # [1, 128, 128]
+#         except Exception as e:
+#             # print(f"problems with the path {path}")
+#             # print(e)
+#             dummy_tensor = torch.zeros((1, 300, 300), dtype=torch.float32)
+#             return dummy_tensor, -1 
+class SpecAugment:
+    def __init__(self, time_mask_param=30, freq_mask_param=13, num_masks=2):
+        self.time_mask_param = time_mask_param
+        self.freq_mask_param = freq_mask_param
+        self.num_masks = num_masks
+
+    def __call__(self, mel_tensor):
+        mel = mel_tensor.clone()
+
+        # mel: [1, freq, time]
+        _, freq, time = mel.shape
+
+        for _ in range(self.num_masks):
+            # Time masking
+            t = random.randint(0, max(0, time - self.time_mask_param))
+            t_len = random.randint(0, self.time_mask_param)
+            mel[:, :, t:t + t_len] = 0
+
+            # Frequency masking
+            f = random.randint(0, max(0, freq - self.freq_mask_param))
+            f_len = random.randint(0, self.freq_mask_param)
+            mel[:, f:f + f_len, :] = 0
+
+        return mel
 class GenreDataset(Dataset):
-    def __init__(self, file_paths, labels, segment_starts, sr=22050, n_mels=300, augment=False):
-        self.file_paths = file_paths
+    def __init__(self, spectrogram_paths, labels, segment_starts, options, augment= False):
+        self.spectrogram_paths = spectrogram_paths
         self.labels = labels
+        self.TARGET_LEN = 750
         self.segment_starts = segment_starts
-        self.sr = sr
-        self.n_mels = n_mels
+        self.options = options
         self.augment = augment
-
+        self.specaugment = SpecAugment() if augment else None
     def __len__(self):
-        return len(self.file_paths)
-
+        return len(self.spectrogram_paths)
     def __getitem__(self, idx):
-        path = self.file_paths[idx]
+        path = self.spectrogram_paths[idx]
         label = self.labels[idx]
         offset = self.segment_starts[idx]
         try:
-            y, sr = librosa.load(path, sr=self.sr,offset=offset, duration=15.0)
             if self.augment:
-                y = augment_audio(y, sr)
-            mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=self.n_mels)
-            mel_db = librosa.power_to_db(mel, ref=np.max)
-            mel_db = librosa.util.fix_length(mel_db, size=300, axis=1)
-            mel_tensor = torch.tensor(mel_db).unsqueeze(0).float() 
-            #print(f"Mel shape before tensor: {mel_db.shape}")  
-            return mel_tensor, label # [1, 128, 128]
+                if  random.randint(1,2) == 1:
+                    option = "track.npy"
+                else:
+                    option = random.choice(self.options)
+                full_path = os.path.join(path, option)
+            else:
+                full_path = os.path.join(path, "track.npy")
+            mel_db = np.load(full_path).T
+            mel_db = mel_db[:,:750] if offset == 0 else mel_db[:,750:]
+            if mel_db.shape[1]< self.TARGET_LEN:
+                pad_size = self.TARGET_LEN - mel_db.shape[1]
+                mel_db = np.pad(mel_db, ((0,0), (0, pad_size)), mode = 'constant')
+            elif mel_db.shape[1] > self.TARGET_LEN:
+                mel_db = mel_db[:, :self.TARGET_LEN]
+            mel_tensor = torch.tensor(mel_db).unsqueeze(0).float()
+            mel_tensor = (mel_tensor - mel_tensor.mean()) / (mel_tensor.std() + 1e-6)
+            if self.specaugment:
+                mel_tensor = self.specaugment(mel_tensor)
+            #mel_tensor = (mel_tensor -mel_tensor.mean()) /
+            return mel_tensor, label
         except Exception as e:
-            # print(f"problems with the path {path}")
-            # print(e)
-            dummy_tensor = torch.zeros((1, 300, 300), dtype=torch.float32)
-            return dummy_tensor, -1 
-
+            print (e)
+            print(f"something went wrong with the file {path}")
+            dummy_tensor = torch.zeros((1, 128,self.TARGET_LEN), dtype=torch.float32)
+            return dummy_tensor, -1
+       
 @torch.no_grad()
 def evaluate_model(model, dataloader, criterion, device):
     model.eval()
@@ -208,7 +279,7 @@ def expand(file_list, label_list):
     return paths, labels, starts
 wandb_logger = logging.getLogger("wandb")
 wandb_logger.setLevel(logging.ERROR)
-wandb.init(project="music-genre-classification", name="gtzan-cnn", config={
+wandb.init(project="music-genre-classification", name="cnn_spectr_2x_beat_augment_scheduler", config={
     "epochs": 100,
     "batch_size": 32,
     "lr": 0.001,
@@ -221,16 +292,32 @@ wandb.init(project="music-genre-classification", name="gtzan-cnn", config={
 # Example file loading -- replace with your actual dataset structure
 #AUDIO_DIR = "/home/ui556004/data/gtzan_old/"
 if __name__== "__main__":
-    AUDIO_DIR = r"C:\Polina\master\thesis\beat_this\data\gtzan_old"
+    AUDIO_DIR = r"C:\Polina\master\thesis\beat_this\data\gtzan_old\audio\spectrograms\gtzan_old"
     all_files = []
     labels = []
-    for genre in os.listdir(AUDIO_DIR):
-        genre_path = os.path.join(AUDIO_DIR, genre)
-        for file in os.listdir(genre_path):
-            if file.endswith('.wav'):
-                all_files.append(os.path.join(genre_path, file))
-                labels.append(genre)
-
+    for file in os.listdir(AUDIO_DIR):
+        #genre = (file[6:])[:-6]
+        genre = file[:-6]
+        #genre_path = os.path.join(AUDIO_DIR, file, "track.npy")
+        genre_path = os.path.join(AUDIO_DIR, file)
+        all_files.append(genre_path)
+        labels.append(genre)
+    #mypath= r"C:\Polina\master\thesis\beat_this\data\gtzan_old\audio\spectrograms\gtzan_old\blues.00043"
+    #options = [f for f in listdir(mypath) if isfile(join(mypath, f))] 
+    options = [
+                #'track.npy',
+                'track_ps-1.npy',
+                'track_ps1.npy',
+                'track_ts-10.npy',
+                'track_ts-2.npy',
+                'track_ts-4.npy',
+                'track_ts-6.npy',
+                'track_ts-8.npy',
+                'track_ts10.npy',
+                'track_ts2.npy',
+                'track_ts4.npy',
+                'track_ts6.npy',
+                'track_ts8.npy']
     # Encode labels
     le = LabelEncoder()
     encoded_labels = le.fit_transform(labels)
@@ -242,8 +329,8 @@ if __name__== "__main__":
     train_paths, train_labels, train_starts = expand(train_files, train_labels)
     val_paths, val_labels, val_starts = expand(val_files, val_labels)
     # Create datasets and dataloaders
-    train_dataset = GenreDataset(train_paths, train_labels, train_starts, augment=True)
-    val_dataset = GenreDataset(val_paths, val_labels,val_starts, augment=False)
+    train_dataset = GenreDataset(train_paths, train_labels, train_starts,options,  augment=True)
+    val_dataset = GenreDataset(val_paths, val_labels, val_starts, options, augment = False)
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=32)
 
@@ -257,6 +344,7 @@ if __name__== "__main__":
 
     # Training loop
     early_stopping = EarlyStopping(patience = 10, min_delta= 0.001, mode = 'max')
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor = 0.8, patience=4, verbose= True)
     num_epochs = 100
     for epoch in tqdm(range(num_epochs)):
         train_loss, train_acc = train_model(model, train_loader, criterion, optimizer, device)
@@ -273,6 +361,7 @@ if __name__== "__main__":
             f"| Train Loss: {train_loss:.4f}, Acc: {train_acc:.4f} "
             f"| Val Loss: {val_loss:.4f}, Acc: {val_acc:.4f}")
         early_stopping(val_acc, model)
+        scheduler.step(val_acc)
         print(f"best val accuracy so far {early_stopping.best_score}")
         if early_stopping.early_stop:
             print("⏹️ Early stopping triggered. Restoring best model.")
