@@ -7,6 +7,7 @@ import evaluate
 import numpy as np
 import wandb
 from transformers import Trainer
+from transformers import EarlyStoppingCallback
 
 gtzan = load_dataset("marsyas/gtzan", "all", trust_remote_code=True)
 gtzan = gtzan["train"].train_test_split(seed=42, shuffle=True, test_size=0.1)
@@ -73,6 +74,7 @@ training_args = TrainingArguments(
     logging_steps=5,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
+    greater_is_better = True,
     #fp16=True,
     report_to = "wandb",
     #push_to_hub=True,
@@ -86,7 +88,7 @@ def compute_metrics(eval_pred):
     predictions = np.argmax(eval_pred.predictions, axis=1)
     return metric.compute(predictions=predictions, references=eval_pred.label_ids)
 print(model)
-"""
+
 wandb.init(project="huggingface_model", name="cluster")
 
 trainer = Trainer(
@@ -96,6 +98,6 @@ trainer = Trainer(
     eval_dataset=gtzan_encoded["test"],
     tokenizer=feature_extractor,
     compute_metrics=compute_metrics,
+    callbacks = [EarlyStoppingCallback(early_stopping_patience =4)]
 )
 trainer.train()
-"""
