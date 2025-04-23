@@ -10,7 +10,7 @@ from transformers import Trainer
 from transformers import EarlyStoppingCallback
 
 gtzan = load_dataset("marsyas/gtzan", "all", trust_remote_code=True)
-gtzan = gtzan["train"].train_test_split(seed=42, shuffle=True, test_size=0.1)
+gtzan = gtzan["train"].train_test_split(seed=42, shuffle=True, test_size=0.2, stratify_by_column="genre")
 id2label_fn = gtzan["train"].features["genre"].int2str
 id2label_fn(gtzan["train"][100]["genre"])
 model_id = "ntu-spml/distilhubert"
