@@ -277,21 +277,22 @@ def expand(file_list, label_list):
             labels.append(label)
             starts.append(start)
     return paths, labels, starts
-wandb_logger = logging.getLogger("wandb")
-wandb_logger.setLevel(logging.ERROR)
-wandb.init(project="music-genre-classification", name="cnn_spectr_2x_beat_augment_scheduler", config={
-    "epochs": 100,
-    "batch_size": 32,
-    "lr": 0.001,
-    "model": "MusicGenreCNN",
-    "augmentation": True,
-    "num_mels": 300,
-})
 
 # ------------------ Main Script ------------------
 # Example file loading -- replace with your actual dataset structure
 #AUDIO_DIR = "/home/ui556004/data/gtzan_old/"
 if __name__== "__main__":
+    wandb_logger = logging.getLogger("wandb")
+    wandb_logger.setLevel(logging.ERROR)
+    wandb.init(project="music-genre-classification", name="cnn_spectr_2x_beat_augment_scheduler", config={
+        "epochs": 100,
+        "batch_size": 32,
+        "lr": 0.001,
+        "model": "MusicGenreCNN",
+        "augmentation": True,
+        "num_mels": 300,
+    })
+
     AUDIO_DIR = r"C:\Polina\master\thesis\beat_this\data\gtzan_old\audio\spectrograms\gtzan_old"
     all_files = []
     labels = []
