@@ -17,17 +17,14 @@ from transformers import Trainer, TrainingArguments
 import os
 from transformers import EarlyStoppingCallback
 from torchinfo import summary
-from ray.train.torch import TorchTrainer
 #from ray.train import Sca
 import pandas as pd
-from ray import tune
-from ray.tune.schedulers import PopulationBasedTraining
-from ray.tune.logger import DEFAULT_LOGGERS
 #from ray.tune.integration.wandb import WandbLogger
 from typing import Dict, List, Any
 import wandb
 
-data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
+#data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
+data_path = Path(r"C:\Users\Kochana\projects\genres\data\gtzan\gtzan.npz")
 data = np.load(data_path)
 lst = data.files
 tracks_path = []
@@ -128,11 +125,10 @@ def model_init(trial= None):
                                 dropouts= sorted(dropouts[:num_layers], reverse=True),
                                 conv_dim =sorted(conv_dim, reverse=True)
                                 )
-        wandb.init(project="ast_model", name="0local_try", config=config
+        wandb.init(project="ast_model", name="0wpc_try", config=config
         )
     else:   
         config = ASTGenreConfig()
-    ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
     model = ASTForGenreClassification(config=config, ast_model=ast_base)
     if trial:
         print(f"hyperparameters chosen: num_layers = {num_layers}")
@@ -158,10 +154,10 @@ training_args = TrainingArguments(
     per_device_train_batch_size=2,
     per_device_eval_batch_size=2,
     learning_rate=3e-5,
-    num_train_epochs=50,
+    num_train_epochs=3,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
-    #fp16=True,
+    fp16=True,
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to=None,
@@ -188,7 +184,7 @@ trainer = Trainer(
 best_run = trainer.hyperparameter_search(
     direction="maximize",
     backend="optuna",
-    n_trials=10,
+    n_trials=2,
    #hp_space=hp_space,
 )
 print(f"best hyperparameters: {best_run.hyperparameters}")
