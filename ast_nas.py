@@ -16,8 +16,7 @@ import evaluate
 from transformers import Trainer, TrainingArguments
 import os
 from transformers import EarlyStoppingCallback
-from ray import tune
-import ray
+from torchinfo import summary
 from ray.train.torch import TorchTrainer
 #from ray.train import Sca
 import pandas as pd
@@ -27,16 +26,11 @@ from ray.tune.logger import DEFAULT_LOGGERS
 #from ray.tune.integration.wandb import WandbLogger
 from typing import Dict, List, Any
 
-
-#os.environ["RAY_LOG_TO_STDERR"] = "1"
-#os.environ["RAY_DISABLE_DASHBOARD"] = "1"
-#ray.init(include_dashboard = False, num_gpus =0)
 data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
 data = np.load(data_path)
 lst = data.files
 tracks_path = []
 labels = []
-#data_path = Path(r"/content/drive/MyDrive/data/gtzan_old")
 for path in lst:
     #path_file = os.path.join(data_path, file, "track.npy")
     tracks_path.append(path)
@@ -47,23 +41,15 @@ train, test, train_labels, test_labels = train_test_split(
         tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
 train, validation, train_labels, validation_labels = train_test_split(
         train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
-class CustomTrainer(Trainer):
-
-        def __init__(self, *args, **kwargs):
-            super(CustomTrainer, self).__init__(*args, **kwargs)
-
-        def _hp_search_setup(self, trial: Any):
-            try:
-                trial.pop('wandb', None)
-            except AttributeError:
-                pass
-            super(CustomTrainer, self)._hp_search_setup(trial)
 
 class ASTGenreConfig(ASTConfig):
     model_type= "ast-genre_classification"
-    def __init__(self, num_labels = 10, **kwargs):
+    def __init__(self, **kwargs):   # **kwargs: arbitrary number of key words arguments
         super().__init__(**kwargs)
-        self.num_labels = num_labels
+        self.num_labels =10
+        self.num_layers_top = kwargs.get("num_layers_top", 2)
+        self.dropouts = kwargs.get("dropouts", [0.2]*self.num_layers_top)
+        self.conv_dim = kwargs.get("conv_dim", [64]*self.num_layers_top)
 
 class GTZANSpectrogramDataset(Dataset):
     def __init__(self, path, labels):
@@ -87,7 +73,74 @@ class GTZANSpectrogramDataset(Dataset):
         label = self.labels[idx]
         return {"input_values": spec, "labels": int(label)}
 data_collator = DefaultDataCollator()
-#metric = load_metric("accuracy")
+ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
+
+class ASTForGenreClassification(PreTrainedModel):
+    config_class = ASTGenreConfig
+
+    def __init__(self, config, ast_model=ast_base):
+        super().__init__(config)
+        self.ast = ast_model
+        
+        self.num_layers_top = config.num_layers_top
+        self.dropout = nn.Dropout(0.2)
+        self.dropouts = config.dropouts
+        self.conv_dim = config.conv_dim
+        self.activation_fn = nn.ReLU()
+        layers = [nn.Conv1d(768, self.conv_dim[0], kernel_size=3, padding="same")]
+        for i in range(self.num_layers_top-1):
+            layers.append( nn.Conv1d(self.conv_dim[i], self.conv_dim[i+1], kernel_size=3, padding=1))
+        self.conv_layers = nn.ModuleList(layers)
+        self.classifier = nn.Linear(self.conv_dim[-1], config.num_labels)
+
+    def forward(self, input_values, labels=None):
+        x = self.ast.embeddings(input_values)
+        x = self.ast.encoder(x).last_hidden_state
+         # or use x[:, 0, :]
+        x = x.transpose(1,2)
+        for layer in self.conv_layers:
+            x = self.activation_fn(layer(x))
+        x = x.mean(dim=2) 
+        x = self.dropout(x)
+        logits = self.classifier(x)
+
+        loss = None
+        if labels is not None:
+            loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
+
+        return SequenceClassifierOutput(loss=loss, logits=logits)
+    
+def model_init(trial= None):
+    if trial is not None:
+        MAX_LAYERS = 4
+        num_layers = trial.suggest_int("num_layers", 1,MAX_LAYERS)
+        conv_dim = []
+        dropouts = []
+        for i in range (MAX_LAYERS):
+            dropouts.append((trial.suggest_int(f"drop_out{i}", 0, 3))/ 10)
+            conv_dim.append(trial.suggest_categorical(f"dim_{i}", [64, 128, 256]) )
+        conv_dim = conv_dim[:num_layers -1]
+        conv_dim.append(trial.suggest_categorical(f"dim_last", [32, 16]) )
+        print("chose number of layers")
+        print(f"num_layers: {num_layers}, conv_dim: {conv_dim[:num_layers]}")
+        config = ASTGenreConfig(num_layers_top = num_layers,
+                                dropouts= sorted(dropouts[:num_layers], reverse=True),
+                                conv_dim =sorted(conv_dim, reverse=True)
+                                )
+    else:   
+        config = ASTGenreConfig()
+    ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
+    model = ASTForGenreClassification(config=config, ast_model=ast_base)
+    if trial:
+        print(f"hyperparameters chosen: num_layers = {num_layers}")
+        summary(model)
+    return model
+
+# def hp_space(trial):
+#     return {
+#         "learning_rate": trial.suggest_float("learning_rate", 3e-5, 3e-4, log=True),
+#         #"num_train_epochs": trial.suggest_categorical( "num_train_epochs",[2, 3, 4])
+#     }
 metric = evaluate.load("accuracy")
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
@@ -108,51 +161,16 @@ training_args = TrainingArguments(
     #fp16=True,
     gradient_accumulation_steps=8,
     greater_is_better=True,
-    report_to="wandb",
+    report_to=None,
     push_to_hub=False,
-    hub_model_id="polinaZaroko/ast_try_again",
+    #hub_model_id="polinaZaroko/ast_try_again",
     hub_strategy="checkpoint",
     save_total_limit=2,
-    warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.
-     
+    warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
 )
 train_dataset = GTZANSpectrogramDataset(train, train_labels)
 val_dataset = GTZANSpectrogramDataset(validation, validation_labels)
-ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
 
-class ASTForGenreClassification(PreTrainedModel):
-    config_class = ASTGenreConfig
-
-    def __init__(self, config, ast_model=ast_base):
-        super().__init__(config)
-        self.ast = ast_model
-        self.classifier = nn.Linear(768, config.num_labels)
-        self.dropout = nn.Dropout(0.2)
-
-    def forward(self, input_values, labels=None):
-        x = self.ast.embeddings(input_values)
-        x = self.ast.encoder(x).last_hidden_state
-        x = x.mean(dim=1)  # or use x[:, 0, :]
-        x = self.dropout(x)
-        logits = self.classifier(x)
-
-        loss = None
-        if labels is not None:
-            loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
-
-        return SequenceClassifierOutput(loss=loss, logits=logits)
-    
-def model_init():
-    config = ASTGenreConfig(num_labels=10)
-    ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
-    model = ASTForGenreClassification(config=config, ast_model=ast_base)
-    return model
-
-def hp_space(trial):
-    return {
-        "learning_rate": trial.suggest_float("learning_rate", 3e-5, 3e-4, log=True),
-        "num_train_epochs": trial.suggest_categorical( "num_train_epochs",[2, 3, 4])
-    }
 trainer = Trainer(
     model_init=model_init,
     args=training_args,
@@ -168,5 +186,5 @@ best_run = trainer.hyperparameter_search(
     direction="maximize",
     backend="optuna",
     n_trials=10,
-    hp_space=hp_space,
+   #hp_space=hp_space,
 )
