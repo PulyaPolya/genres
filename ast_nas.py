@@ -111,27 +111,27 @@ class ASTForGenreClassification(PreTrainedModel):
 def objective(trial):
     if trial is not None:
         MAX_LAYERS = 4
-        num_layers = trial.suggest_int("num_layers", 1,MAX_LAYERS)
+        num_layers_top = trial.suggest_int("num_layers_top", 1,MAX_LAYERS)
         conv_dim = []
         dropouts = []
         for i in range (MAX_LAYERS):
-            dropouts.append((trial.suggest_int(f"drop_out{i}", 0, 3))/ 10)
+            dropouts.append((trial.suggest_int(f"drop_out{i}", 0, 4))/ 10)
             conv_dim.append(trial.suggest_categorical(f"dim_{i}", [64, 128, 256]) )
-        conv_dim = conv_dim[:num_layers -1]
-        conv_dim.append(trial.suggest_categorical(f"dim_last", [32, 16]) )
+        conv_dim = conv_dim[:num_layers_top -1]
+        conv_dim.append(trial.suggest_categorical(f"dim_last", [32,64, 16]) )
         print("chose number of layers")
-        print(f"num_layers: {num_layers}, conv_dim: {conv_dim[:num_layers]}")
-        config = ASTGenreConfig(num_layers_top = num_layers,
-                                dropouts= sorted(dropouts[:num_layers], reverse=True),
+        print(f"num_layers: {num_layers_top}, conv_dim: {conv_dim[:num_layers_top]}")
+        config = ASTGenreConfig(num_layers_top = num_layers_top,
+                                dropouts= sorted(dropouts[:num_layers_top], reverse=True),
                                 conv_dim =sorted(conv_dim, reverse=True)
                                 )
-        wandb.init(project="ast_model", name=f"0wpc_try_{trial.number}", config=config
+        wandb.init(project="ast_model", name=f"0wpc_try_{trial.number}", config= config
         )
     else:   
         config = ASTGenreConfig()
     model = ASTForGenreClassification(config=config, ast_model=ast_base)
     if trial:
-        print(f"hyperparameters chosen: num_layers = {num_layers}")
+        print(f"hyperparameters chosen: num_layers = {num_layers_top}")
         summary(model)
     training_args = TrainingArguments(
     output_dir="./ast-gtzan_w_pc",
@@ -141,7 +141,7 @@ def objective(trial):
     per_device_train_batch_size=2,
     per_device_eval_batch_size=2,
     learning_rate=3e-5,
-    num_train_epochs=3,
+    num_train_epochs=2,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
     fp16=True,
@@ -155,7 +155,7 @@ def objective(trial):
     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
 )    
     trainer = Trainer(
-    model_init=model_init,
+    model = model,
     args=training_args,
     train_dataset=train_dataset,
     eval_dataset=val_dataset,
@@ -188,8 +188,8 @@ def model_init(trial= None):
                                 dropouts= sorted(dropouts[:num_layers], reverse=True),
                                 conv_dim =sorted(conv_dim, reverse=True)
                                 )
-        wandb.init(project="ast_model", name="0wpc_try", config=config
-        )
+        # wandb.init(project="ast_model", name="0wpc_try", config=config
+        # )
     else:   
         config = ASTGenreConfig()
     model = ASTForGenreClassification(config=config, ast_model=ast_base)
@@ -243,6 +243,8 @@ val_dataset = GTZANSpectrogramDataset(validation, validation_labels)
 # )
 # print(f"best hyperparameters: {best_run.hyperparameters}")
 study = optuna.create_study(direction= "maximize")
-study.optimize(objective, n_trials = 3)
+study.optimize(objective, n_trials = 10)
 best_trial = study.best_trial
 print("Best hyperparameters:", study.best_params)
+df = pd.DataFrame(study.best_params, index = ['i',])
+df.to_csv("best_hyp.csv")
