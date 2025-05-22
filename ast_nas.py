@@ -25,6 +25,7 @@ from ray.tune.schedulers import PopulationBasedTraining
 from ray.tune.logger import DEFAULT_LOGGERS
 #from ray.tune.integration.wandb import WandbLogger
 from typing import Dict, List, Any
+import wandb
 
 data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
 data = np.load(data_path)
@@ -127,6 +128,8 @@ def model_init(trial= None):
                                 dropouts= sorted(dropouts[:num_layers], reverse=True),
                                 conv_dim =sorted(conv_dim, reverse=True)
                                 )
+        wandb.init(project="ast_model", name="0local_try", config=config
+        )
     else:   
         config = ASTGenreConfig()
     ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
@@ -188,3 +191,4 @@ best_run = trainer.hyperparameter_search(
     n_trials=10,
    #hp_space=hp_space,
 )
+print(f"best hyperparameters: {best_run.hyperparameters}")
