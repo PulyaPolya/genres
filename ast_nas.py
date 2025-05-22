@@ -17,12 +17,13 @@ from transformers import Trainer, TrainingArguments
 import os
 from transformers import EarlyStoppingCallback
 from torchinfo import summary
+import optuna
+import gc
 #from ray.train import Sca
 import pandas as pd
 #from ray.tune.integration.wandb import WandbLogger
 from typing import Dict, List, Any
 import wandb
-
 #data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
 data_path = Path(r"C:\Users\Kochana\projects\genres\data\gtzan\gtzan.npz")
 data = np.load(data_path)
@@ -107,7 +108,69 @@ class ASTForGenreClassification(PreTrainedModel):
             loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
 
         return SequenceClassifierOutput(loss=loss, logits=logits)
-    
+def objective(trial):
+    if trial is not None:
+        MAX_LAYERS = 4
+        num_layers = trial.suggest_int("num_layers", 1,MAX_LAYERS)
+        conv_dim = []
+        dropouts = []
+        for i in range (MAX_LAYERS):
+            dropouts.append((trial.suggest_int(f"drop_out{i}", 0, 3))/ 10)
+            conv_dim.append(trial.suggest_categorical(f"dim_{i}", [64, 128, 256]) )
+        conv_dim = conv_dim[:num_layers -1]
+        conv_dim.append(trial.suggest_categorical(f"dim_last", [32, 16]) )
+        print("chose number of layers")
+        print(f"num_layers: {num_layers}, conv_dim: {conv_dim[:num_layers]}")
+        config = ASTGenreConfig(num_layers_top = num_layers,
+                                dropouts= sorted(dropouts[:num_layers], reverse=True),
+                                conv_dim =sorted(conv_dim, reverse=True)
+                                )
+        wandb.init(project="ast_model", name=f"0wpc_try_{trial.number}", config=config
+        )
+    else:   
+        config = ASTGenreConfig()
+    model = ASTForGenreClassification(config=config, ast_model=ast_base)
+    if trial:
+        print(f"hyperparameters chosen: num_layers = {num_layers}")
+        summary(model)
+    training_args = TrainingArguments(
+    output_dir="./ast-gtzan_w_pc",
+    evaluation_strategy="epoch",
+    save_strategy="epoch",
+    logging_strategy="epoch",
+    per_device_train_batch_size=2,
+    per_device_eval_batch_size=2,
+    learning_rate=3e-5,
+    num_train_epochs=3,
+    load_best_model_at_end=True,
+    metric_for_best_model="accuracy",
+    fp16=True,
+    gradient_accumulation_steps=8,
+    greater_is_better=True,
+    report_to=None,
+    push_to_hub=False,
+    #hub_model_id="polinaZaroko/ast_try_again",
+    hub_strategy="checkpoint",
+    save_total_limit=2,
+    warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
+)    
+    trainer = Trainer(
+    model_init=model_init,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=val_dataset,
+    tokenizer=None,
+    data_collator=data_collator,
+    compute_metrics=compute_metrics,
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=8)],
+)
+    trainer.train()
+    eval_result = trainer.evaluate()
+    del model, trainer
+    torch.cuda.empty_cache()
+    gc.collect()
+    wandb.finish()
+    return eval_result["eval_accuracy"]
 def model_init(trial= None):
     if trial is not None:
         MAX_LAYERS = 4
@@ -146,45 +209,40 @@ def compute_metrics(eval_pred):
     predictions = np.argmax(logits, axis=1)
     return metric.compute(predictions=predictions, references=labels)
 
-training_args = TrainingArguments(
-    output_dir="./ast-gtzan_w_pc",
-    evaluation_strategy="epoch",
-    save_strategy="epoch",
-    logging_strategy="epoch",
-    per_device_train_batch_size=2,
-    per_device_eval_batch_size=2,
-    learning_rate=3e-5,
-    num_train_epochs=3,
-    load_best_model_at_end=True,
-    metric_for_best_model="accuracy",
-    fp16=True,
-    gradient_accumulation_steps=8,
-    greater_is_better=True,
-    report_to=None,
-    push_to_hub=False,
-    #hub_model_id="polinaZaroko/ast_try_again",
-    hub_strategy="checkpoint",
-    save_total_limit=2,
-    warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
-)
+# training_args = TrainingArguments(
+#     output_dir="./ast-gtzan_w_pc",
+#     evaluation_strategy="epoch",
+#     save_strategy="epoch",
+#     logging_strategy="epoch",
+#     per_device_train_batch_size=2,
+#     per_device_eval_batch_size=2,
+#     learning_rate=3e-5,
+#     num_train_epochs=3,
+#     load_best_model_at_end=True,
+#     metric_for_best_model="accuracy",
+#     fp16=True,
+#     gradient_accumulation_steps=8,
+#     greater_is_better=True,
+#     report_to=None,
+#     push_to_hub=False,
+#     #hub_model_id="polinaZaroko/ast_try_again",
+#     hub_strategy="checkpoint",
+#     save_total_limit=2,
+#     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
+# )
 train_dataset = GTZANSpectrogramDataset(train, train_labels)
 val_dataset = GTZANSpectrogramDataset(validation, validation_labels)
 
-trainer = Trainer(
-    model_init=model_init,
-    args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=val_dataset,
-    tokenizer=None,
-    data_collator=data_collator,
-    compute_metrics=compute_metrics,
-    callbacks=[EarlyStoppingCallback(early_stopping_patience=8)],
-)
 
-best_run = trainer.hyperparameter_search(
-    direction="maximize",
-    backend="optuna",
-    n_trials=2,
-   #hp_space=hp_space,
-)
-print(f"best hyperparameters: {best_run.hyperparameters}")
+
+# best_run = trainer.hyperparameter_search(
+#     direction="maximize",
+#     backend="optuna",
+#     n_trials=2,
+#    #hp_space=hp_space,
+# )
+# print(f"best hyperparameters: {best_run.hyperparameters}")
+study = optuna.create_study(direction= "maximize")
+study.optimize(objective, n_trials = 3)
+best_trial = study.best_trial
+print("Best hyperparameters:", study.best_params)
