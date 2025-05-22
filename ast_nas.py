@@ -141,7 +141,7 @@ def objective(trial):
     per_device_train_batch_size=2,
     per_device_eval_batch_size=2,
     learning_rate=3e-5,
-    num_train_epochs=2,
+    num_train_epochs=50,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
     fp16=True,
