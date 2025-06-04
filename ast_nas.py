@@ -2,6 +2,7 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import SequenceClassifierOutput
 import torch.nn as nn
 import torch.nn.functional as F
+import random
 from transformers import PretrainedConfig
 from transformers import ASTConfig
 from sklearn.preprocessing import LabelEncoder
@@ -19,13 +20,15 @@ from transformers import EarlyStoppingCallback
 from torchinfo import summary
 import optuna
 import gc
+from pedalboard import Pedalboard, PitchShift, time_stretch
+from beat_this.preprocessing import LogMelSpect, load_audio
 #from ray.train import Sca
 import pandas as pd
 #from ray.tune.integration.wandb import WandbLogger
 from typing import Dict, List, Any
 import wandb
-#data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
-data_path = Path(r"C:\Users\Kochana\projects\genres\data\gtzan\gtzan.npz")
+data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
+#data_path = Path(r"C:\Users\Kochana\projects\genres\data\gtzan\gtzan.npz")
 data = np.load(data_path)
 lst = data.files
 tracks_path = []
@@ -51,7 +54,7 @@ class ASTGenreConfig(ASTConfig):
         self.conv_dim = kwargs.get("conv_dim", [64]*self.num_layers_top)
 
 class GTZANSpectrogramDataset(Dataset):
-    def __init__(self, path, labels):
+    def __init__(self, path, labels, transform = None):
         self.paths = path
         self.labels = labels
         self.max_time = 1020
@@ -71,6 +74,75 @@ class GTZANSpectrogramDataset(Dataset):
         #spec = spec.unsqueeze(0)
         label = self.labels[idx]
         return {"input_values": spec, "labels": int(label)}
+    
+class Augment:
+    def __init__(self, augm_params = None, audio_sr = 22050, aug_sr = 44100, mel_params = None):
+        self.audio_sr = audio_sr
+        self.aug_sr=aug_sr            
+        
+        default_mel_params = dict(
+                        n_fft=1024,
+                        hop_length=441,
+                        f_min=30,
+                        f_max=11000,
+                        n_mels=128,
+                        mel_scale="slaney",
+                        normalized="frame_length",
+                        power=1
+                    )
+        default_augm_params = dict(
+                time_stretch= (20,4),
+                pitch_shift = (-5,6),
+                noise = 5
+            )
+        self.mel_params = mel_params if mel_params is not None else default_mel_params
+        self.augm_params = augm_params if augm_params is not None else default_augm_params
+        self.logspect_class = LogMelSpect(audio_sr, **self.mel_params)
+    
+    def __call__(self, audio_path):
+        waveform, sr = load_audio(audio_path)
+        assert (
+                    sr == self.audio_sr
+                ), f"Sample rate mismatch: {sr} != {self.audio_sr}"
+        
+        # TODO: apply augmentation only with a certain probability
+        transformation = random.choice(["noise", "stretch", "pitch"])
+        if transformation == "noise":
+            noise_random = np.random.normal(0, 1, size = waveform.shape)
+            augmented = waveform + noise_random*self.augm_params["noise"] / 100
+            augmented = np.clip(augmented, -1.0, 1.0)
+        elif transformation == "stretch":
+            time_stretch = self.augm_params["time_stretch"]
+            time_stretch = range(
+                -time_stretch[0],
+                time_stretch[0] + 1,
+                time_stretch[1] if len(time_stretch) > 1 else 1,
+            )
+            stretch = random.randrange(**time_stretch)
+            augmented = time_stretch(
+            waveform,
+            self.aug_sr,
+            stretch_factor=1 + stretch / 100,
+            pitch_shift_in_semitones=0.0,
+        ).squeeze()
+        elif transformation == "pitch":
+            pitch_shift = self.augm_params["pitch_shift"]
+            shifts = (
+            range(pitch_shift[0], pitch_shift[1] + 1)
+            if pitch_shift
+            else [0]
+            )
+            shift = random.randrange(**shifts)
+            board = Pedalboard(
+            [
+                PitchShift(semitones=shift),
+            ]
+            )
+        # apply pedalboard
+            augmented = board(waveform, self.aug_sr)
+        spec = self.logspect_class(torch.tensor(augmented, dtype=torch.float32))
+        return spec
+
 data_collator = DefaultDataCollator()
 ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
 
@@ -84,11 +156,22 @@ class ASTForGenreClassification(PreTrainedModel):
         self.num_layers_top = config.num_layers_top
         self.dropout = nn.Dropout(0.2)
         self.dropouts = config.dropouts
+        self.normalisations = config.normalisations
         self.conv_dim = config.conv_dim
         self.activation_fn = nn.ReLU()
-        layers = [nn.Conv1d(768, self.conv_dim[0], kernel_size=3, padding="same")]
+        layers = []
+        layers.append( nn.Sequential(nn.Conv1d(768, self.conv_dim[0], kernel_size=3, padding="same"),
+                      self.normalisations[0],
+                      self.activation_fn,
+                      nn.Dropout(self.dropouts[0]),
+                      ))
         for i in range(self.num_layers_top-1):
-            layers.append( nn.Conv1d(self.conv_dim[i], self.conv_dim[i+1], kernel_size=3, padding=1))
+            layers.append( nn.Sequential(
+                nn.Conv1d(self.conv_dim[i], self.conv_dim[i+1], kernel_size=3, padding=1),
+                 self.normalisations[i],
+                      self.activation_fn,
+                      nn.Dropout(self.dropouts[i])
+                    ))
         self.conv_layers = nn.ModuleList(layers)
         self.classifier = nn.Linear(self.conv_dim[-1], config.num_labels)
 
@@ -114,9 +197,11 @@ def objective(trial):
         num_layers_top = trial.suggest_int("num_layers_top", 1,MAX_LAYERS)
         conv_dim = []
         dropouts = []
+        normalisations = []
         for i in range (MAX_LAYERS):
             dropouts.append((trial.suggest_int(f"drop_out{i}", 0, 4))/ 10)
             conv_dim.append(trial.suggest_categorical(f"dim_{i}", [64, 128, 256]) )
+            
         conv_dim = conv_dim[:num_layers_top -1]
         conv_dim.append(trial.suggest_categorical(f"dim_last", [32,64, 16]) )
         print("chose number of layers")
@@ -144,7 +229,7 @@ def objective(trial):
     num_train_epochs=50,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
-    fp16=True,
+    #fp16=True,
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to=None,
@@ -230,8 +315,9 @@ def compute_metrics(eval_pred):
 #     save_total_limit=2,
 #     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
 # )
-train_dataset = GTZANSpectrogramDataset(train, train_labels)
-val_dataset = GTZANSpectrogramDataset(validation, validation_labels)
+transform = Augment()
+train_dataset = GTZANSpectrogramDataset(train, train_labels,transform = transform )
+val_dataset = GTZANSpectrogramDataset(validation, validation_labels, transform = None)
 
 
 
