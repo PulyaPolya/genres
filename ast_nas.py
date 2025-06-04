@@ -27,8 +27,8 @@ import pandas as pd
 #from ray.tune.integration.wandb import WandbLogger
 from typing import Dict, List, Any
 import wandb
-data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
-#data_path = Path(r"C:\Users\Kochana\projects\genres\data\gtzan\gtzan.npz")
+#data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
+data_path = Path(r"C:\Users\Kochana\projects\genres\data\gtzan\gtzan.npz")
 data = np.load(data_path)
 lst = data.files
 tracks_path = []
@@ -157,40 +157,49 @@ class ASTForGenreClassification(PreTrainedModel):
         self.dropout = nn.Dropout(0.2)
         self.dropouts = config.dropouts
         self.normalisations = config.normalisations
-        self.conv_dim = config.conv_dim
+        self.conv_dim = [768] +config.conv_dim
         self.activation_fn = nn.ReLU()
         layers = []
-        layers.append( nn.Sequential(nn.Conv1d(768, self.conv_dim[0], kernel_size=3, padding="same"),
-                      self.normalisations[0],
-                      self.activation_fn,
-                      nn.Dropout(self.dropouts[0]),
-                      ))
-        for i in range(self.num_layers_top-1):
+        
+        # layers.append( nn.Sequential(nn.Conv1d(768, self.conv_dim[0], kernel_size=3, padding="same"),
+        #               #self.normalisations[0],
+        #               self.activation_fn,
+        #               nn.Dropout(self.dropouts[0]),
+        #               ))
+        for i in range(self.num_layers_top):
+            #norm_type = self.normalisations[i]
             layers.append( nn.Sequential(
                 nn.Conv1d(self.conv_dim[i], self.conv_dim[i+1], kernel_size=3, padding=1),
-                 self.normalisations[i],
-                      self.activation_fn,
-                      nn.Dropout(self.dropouts[i])
+                self.get_normalisation(self.normalisations[i], self.conv_dim[i+1]),
+                self.activation_fn,
+                nn.Dropout(self.dropouts[i])
                     ))
-        self.conv_layers = nn.ModuleList(layers)
+        self.hidden_layers = nn.ModuleList(layers)
+        print(self.hidden_layers)
         self.classifier = nn.Linear(self.conv_dim[-1], config.num_labels)
-
+    def get_normalisation(self, norm_type, dim) -> nn.Module:
+        norm_mapping = {
+        "batch": lambda d: nn.BatchNorm1d(d),
+        "layer": lambda d: nn.LayerNorm(d),
+        "none": lambda d: nn.Identity(),
+    }
+        return norm_mapping.get(norm_type, lambda d: nn.Identity())(dim)
     def forward(self, input_values, labels=None):
         x = self.ast.embeddings(input_values)
         x = self.ast.encoder(x).last_hidden_state
          # or use x[:, 0, :]
         x = x.transpose(1,2)
-        for layer in self.conv_layers:
-            x = self.activation_fn(layer(x))
+        for layer in self.hidden_layers:
+            x = layer(x)
         x = x.mean(dim=2) 
-        x = self.dropout(x)
+        #x = self.dropout(x)
         logits = self.classifier(x)
 
         loss = None
         if labels is not None:
             loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
-
         return SequenceClassifierOutput(loss=loss, logits=logits)
+    
 def objective(trial):
     if trial is not None:
         MAX_LAYERS = 4
@@ -201,6 +210,7 @@ def objective(trial):
         for i in range (MAX_LAYERS):
             dropouts.append((trial.suggest_int(f"drop_out{i}", 0, 4))/ 10)
             conv_dim.append(trial.suggest_categorical(f"dim_{i}", [64, 128, 256]) )
+            normalisations.append(trial.suggest_categorical(f"normalisation_{i}", ["batch", "none"]) )
             
         conv_dim = conv_dim[:num_layers_top -1]
         conv_dim.append(trial.suggest_categorical(f"dim_last", [32,64, 16]) )
@@ -208,9 +218,10 @@ def objective(trial):
         print(f"num_layers: {num_layers_top}, conv_dim: {conv_dim[:num_layers_top]}")
         config = ASTGenreConfig(num_layers_top = num_layers_top,
                                 dropouts= sorted(dropouts[:num_layers_top], reverse=True),
-                                conv_dim =sorted(conv_dim, reverse=True)
+                                conv_dim =sorted(conv_dim, reverse=True),
+                                normalisations = (normalisations[:num_layers_top])
                                 )
-        wandb.init(project="ast_model", name=f"0wpc_try_{trial.number}", config= config
+        wandb.init(project="ast_model", name=f"0wpc_more_hyper_{trial.number}", config= config
         )
     else:   
         config = ASTGenreConfig()
@@ -229,7 +240,7 @@ def objective(trial):
     num_train_epochs=50,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
-    #fp16=True,
+    fp16=True,
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to=None,
@@ -316,7 +327,7 @@ def compute_metrics(eval_pred):
 #     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
 # )
 transform = Augment()
-train_dataset = GTZANSpectrogramDataset(train, train_labels,transform = transform )
+train_dataset = GTZANSpectrogramDataset(train, train_labels,transform = None)
 val_dataset = GTZANSpectrogramDataset(validation, validation_labels, transform = None)
 
 
