@@ -3,6 +3,8 @@ from transformers.modeling_outputs import SequenceClassifierOutput
 import torch.nn as nn
 import torch.nn.functional as F
 import random
+from os import listdir
+from os.path import isfile, join
 from transformers import PretrainedConfig
 from transformers import ASTConfig
 from sklearn.preprocessing import LabelEncoder
@@ -28,21 +30,30 @@ import pandas as pd
 from typing import Dict, List, Any
 import wandb
 #data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
-data_path = Path(r"C:\Users\Kochana\projects\genres\data\gtzan\gtzan.npz")
-data = np.load(data_path)
-lst = data.files
-tracks_path = []
-labels = []
-for path in lst:
-    #path_file = os.path.join(data_path, file, "track.npy")
-    tracks_path.append(path)
-    labels.append(path[6:][:-12])
-le = LabelEncoder()
-encoded_labels = le.fit_transform(labels)
-train, test, train_labels, test_labels = train_test_split(
-        tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
-train, validation, train_labels, validation_labels = train_test_split(
-        train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
+def get_spectrograms (data_path = None):
+    data_path = data_path if data_path is not None else Path(r"C:\Users\Kochana\projects\genres\data\gtzan\gtzan.npz")
+    data = np.load(data_path)
+    lst = data.files
+    tracks_path = []
+    labels = []
+    for path in lst:
+        #path_file = os.path.join(data_path, file, "track.npy")
+        tracks_path.append(path)
+        labels.append(path[6:][:-12])
+    return data, tracks_path, labels
+
+def get_audio(data_path = None):
+    labels = []
+    track_paths = []
+    data_path = data_path if data_path is not None else r"C:\Users\Kochana\projects\genres\data\gtzan_old"
+    subfolders = [ f.path for f in os.scandir(data_path) if f.is_dir() ]
+    for dir in subfolders:
+        onlyfiles = [join(dir, f) for f in listdir(dir) if isfile(join(dir, f))]
+        labels.extend([dir.split("\\")[-1]]*len(onlyfiles))
+        track_paths += onlyfiles
+    return data_path, track_paths, labels
+
+
 
 class ASTGenreConfig(ASTConfig):
     model_type= "ast-genre_classification"
@@ -54,18 +65,23 @@ class ASTGenreConfig(ASTConfig):
         self.conv_dim = kwargs.get("conv_dim", [64]*self.num_layers_top)
 
 class GTZANSpectrogramDataset(Dataset):
-    def __init__(self, path, labels, transform = None):
+    def __init__(self, path, labels, transform = None, augment = False):
         self.paths = path
         self.labels = labels
         self.max_time = 1020
         self.data = data
+        self.transform = transform
+        self.augment = augment
         
     def __len__(self):
         return len(self.paths)
 
     def __getitem__(self, idx):
         #spec = self.spectrograms[idx]  # shape: (128, time)
-        spec = data[self.paths[idx]]
+        if self.transform:
+            spec =self.transform(self.paths[idx], self.augment)
+        else:
+            spec = data[self.paths[idx]]
         if spec.ndim == 3 and spec.shape[0] == 1:
             spec = spec.squeeze(0)
         spec = spec[:self.max_time, :]
@@ -98,48 +114,52 @@ class Augment:
         self.mel_params = mel_params if mel_params is not None else default_mel_params
         self.augm_params = augm_params if augm_params is not None else default_augm_params
         self.logspect_class = LogMelSpect(audio_sr, **self.mel_params)
+        
     
-    def __call__(self, audio_path):
+    def __call__(self, audio_path, augment = False):
         waveform, sr = load_audio(audio_path)
         assert (
                     sr == self.audio_sr
                 ), f"Sample rate mismatch: {sr} != {self.audio_sr}"
         
         # TODO: apply augmentation only with a certain probability
-        transformation = random.choice(["noise", "stretch", "pitch"])
-        if transformation == "noise":
-            noise_random = np.random.normal(0, 1, size = waveform.shape)
-            augmented = waveform + noise_random*self.augm_params["noise"] / 100
-            augmented = np.clip(augmented, -1.0, 1.0)
-        elif transformation == "stretch":
-            time_stretch = self.augm_params["time_stretch"]
-            time_stretch = range(
-                -time_stretch[0],
-                time_stretch[0] + 1,
-                time_stretch[1] if len(time_stretch) > 1 else 1,
-            )
-            stretch = random.randrange(**time_stretch)
-            augmented = time_stretch(
-            waveform,
-            self.aug_sr,
-            stretch_factor=1 + stretch / 100,
-            pitch_shift_in_semitones=0.0,
-        ).squeeze()
-        elif transformation == "pitch":
-            pitch_shift = self.augm_params["pitch_shift"]
-            shifts = (
-            range(pitch_shift[0], pitch_shift[1] + 1)
-            if pitch_shift
-            else [0]
-            )
-            shift = random.randrange(**shifts)
-            board = Pedalboard(
-            [
-                PitchShift(semitones=shift),
-            ]
-            )
-        # apply pedalboard
-            augmented = board(waveform, self.aug_sr)
+        if augment :
+            transformation = random.choice(["noise", "stretch", "pitch"])
+            if transformation == "noise":
+                noise_random = np.random.normal(0, 1, size = waveform.shape)
+                augmented = waveform + noise_random*self.augm_params["noise"] / 100
+                augmented = np.clip(augmented, -1.0, 1.0)
+            elif transformation == "stretch":
+                time_stretch_params = self.augm_params["time_stretch"]
+                stretch_range = (
+                    -time_stretch_params [0],
+                    time_stretch_params [0] + 1,
+                    time_stretch_params [1] if len(time_stretch_params ) > 1 else 1,
+                )
+                stretch = random.randrange(stretch_range[0],stretch_range[1], stretch_range[2])
+                augmented = time_stretch(
+                input_audio=waveform,
+                samplerate=self.aug_sr,
+                stretch_factor=1 + stretch / 100,
+                pitch_shift_in_semitones=0.0,
+            ).squeeze()
+            elif transformation == "pitch":
+                pitch_shift = self.augm_params["pitch_shift"]
+                shifts = (
+                (pitch_shift[0], pitch_shift[1] + 1)
+                if pitch_shift
+                else [0]
+                )
+                shift = random.randrange(shifts[0], shifts[1])
+                board = Pedalboard(
+                [
+                    PitchShift(semitones=shift),
+                ]
+                )
+            # apply pedalboard
+                augmented = board(waveform, self.aug_sr)
+        else:
+            augmented = waveform.copy()
         spec = self.logspect_class(torch.tensor(augmented, dtype=torch.float32))
         return spec
 
@@ -221,8 +241,8 @@ def objective(trial):
                                 conv_dim =sorted(conv_dim, reverse=True),
                                 normalisations = (normalisations[:num_layers_top])
                                 )
-        wandb.init(project="ast_model", name=f"0wpc_more_hyper_{trial.number}", config= config
-        )
+       # wandb.init(project="ast_model", name=f"0wpc_more_hyper_{trial.number}", config= config
+        #)
     else:   
         config = ASTGenreConfig()
     model = ASTForGenreClassification(config=config, ast_model=ast_base)
@@ -267,78 +287,51 @@ def objective(trial):
     gc.collect()
     wandb.finish()
     return eval_result["eval_accuracy"]
-def model_init(trial= None):
-    if trial is not None:
-        MAX_LAYERS = 4
-        num_layers = trial.suggest_int("num_layers", 1,MAX_LAYERS)
-        conv_dim = []
-        dropouts = []
-        for i in range (MAX_LAYERS):
-            dropouts.append((trial.suggest_int(f"drop_out{i}", 0, 3))/ 10)
-            conv_dim.append(trial.suggest_categorical(f"dim_{i}", [64, 128, 256]) )
-        conv_dim = conv_dim[:num_layers -1]
-        conv_dim.append(trial.suggest_categorical(f"dim_last", [32, 16]) )
-        print("chose number of layers")
-        print(f"num_layers: {num_layers}, conv_dim: {conv_dim[:num_layers]}")
-        config = ASTGenreConfig(num_layers_top = num_layers,
-                                dropouts= sorted(dropouts[:num_layers], reverse=True),
-                                conv_dim =sorted(conv_dim, reverse=True)
-                                )
-        # wandb.init(project="ast_model", name="0wpc_try", config=config
-        # )
-    else:   
-        config = ASTGenreConfig()
-    model = ASTForGenreClassification(config=config, ast_model=ast_base)
-    if trial:
-        print(f"hyperparameters chosen: num_layers = {num_layers}")
-        summary(model)
-    return model
+# def model_init(trial= None):
+#     if trial is not None:
+#         MAX_LAYERS = 4
+#         num_layers = trial.suggest_int("num_layers", 1,MAX_LAYERS)
+#         conv_dim = []
+#         dropouts = []
+#         for i in range (MAX_LAYERS):
+#             dropouts.append((trial.suggest_int(f"drop_out{i}", 0, 3))/ 10)
+#             conv_dim.append(trial.suggest_categorical(f"dim_{i}", [64, 128, 256]) )
+#         conv_dim = conv_dim[:num_layers -1]
+#         conv_dim.append(trial.suggest_categorical(f"dim_last", [32, 16]) )
+#         print("chose number of layers")
+#         print(f"num_layers: {num_layers}, conv_dim: {conv_dim[:num_layers]}")
+#         config = ASTGenreConfig(num_layers_top = num_layers,
+#                                 dropouts= sorted(dropouts[:num_layers], reverse=True),
+#                                 conv_dim =sorted(conv_dim, reverse=True)
+#                                 )
+#         # wandb.init(project="ast_model", name="0wpc_try", config=config
+#         # )
+#     else:   
+#         config = ASTGenreConfig()
+#     model = ASTForGenreClassification(config=config, ast_model=ast_base)
+#     if trial:
+#         print(f"hyperparameters chosen: num_layers = {num_layers}")
+#         summary(model)
+#     return model
 
-# def hp_space(trial):
-#     return {
-#         "learning_rate": trial.suggest_float("learning_rate", 3e-5, 3e-4, log=True),
-#         #"num_train_epochs": trial.suggest_categorical( "num_train_epochs",[2, 3, 4])
-#     }
 metric = evaluate.load("accuracy")
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=1)
     return metric.compute(predictions=predictions, references=labels)
 
-# training_args = TrainingArguments(
-#     output_dir="./ast-gtzan_w_pc",
-#     evaluation_strategy="epoch",
-#     save_strategy="epoch",
-#     logging_strategy="epoch",
-#     per_device_train_batch_size=2,
-#     per_device_eval_batch_size=2,
-#     learning_rate=3e-5,
-#     num_train_epochs=3,
-#     load_best_model_at_end=True,
-#     metric_for_best_model="accuracy",
-#     fp16=True,
-#     gradient_accumulation_steps=8,
-#     greater_is_better=True,
-#     report_to=None,
-#     push_to_hub=False,
-#     #hub_model_id="polinaZaroko/ast_try_again",
-#     hub_strategy="checkpoint",
-#     save_total_limit=2,
-#     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
-# )
+
+data, tracks_path, labels  = get_audio()
+le = LabelEncoder()
+encoded_labels = le.fit_transform(labels)
+train, test, train_labels, test_labels = train_test_split(
+        tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
+train, validation, train_labels, validation_labels = train_test_split(
+        train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
 transform = Augment()
-train_dataset = GTZANSpectrogramDataset(train, train_labels,transform = None)
-val_dataset = GTZANSpectrogramDataset(validation, validation_labels, transform = None)
+train_dataset = GTZANSpectrogramDataset(train, train_labels,transform = transform, augment = True)
+val_dataset = GTZANSpectrogramDataset(validation, validation_labels, transform = transform, augment = False)
 
-
-
-# best_run = trainer.hyperparameter_search(
-#     direction="maximize",
-#     backend="optuna",
-#     n_trials=2,
-#    #hp_space=hp_space,
-# )
-# print(f"best hyperparameters: {best_run.hyperparameters}")
 study = optuna.create_study(direction= "maximize")
 study.optimize(objective, n_trials = 10)
 best_trial = study.best_trial
