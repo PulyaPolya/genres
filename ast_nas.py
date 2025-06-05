@@ -6,6 +6,7 @@ import random
 from os import listdir
 from os.path import isfile, join
 from transformers import PretrainedConfig
+from torch.utils.data import DataLoader
 from transformers import ASTConfig
 from sklearn.preprocessing import LabelEncoder
 import numpy as np
@@ -30,6 +31,11 @@ import pandas as pd
 from typing import Dict, List, Any
 import wandb
 #data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
+
+
+metric = evaluate.load("accuracy")
+data_collator = DefaultDataCollator()
+ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
 def get_spectrograms (data_path = None):
     data_path = data_path if data_path is not None else Path(r"C:\Users\Kochana\projects\genres\data\gtzan\gtzan.npz")
     data = np.load(data_path)
@@ -45,7 +51,7 @@ def get_spectrograms (data_path = None):
 def get_audio(data_path = None):
     labels = []
     track_paths = []
-    data_path = data_path if data_path is not None else r"C:\Users\Kochana\projects\genres\data\gtzan_old"
+    data_path = data_path if data_path is not None else r"C:\Users\Kochana\projects\genres\data\gtzan_old\gtzan_old"
     subfolders = [ f.path for f in os.scandir(data_path) if f.is_dir() ]
     for dir in subfolders:
         onlyfiles = [join(dir, f) for f in listdir(dir) if isfile(join(dir, f))]
@@ -123,7 +129,8 @@ class Augment:
                 ), f"Sample rate mismatch: {sr} != {self.audio_sr}"
         
         # TODO: apply augmentation only with a certain probability
-        if augment :
+        #augment = True if augment is True else random.choice([True, False])
+        if augment and random.random() < 0.3:
             waveform = np.asarray(waveform, dtype=np.float32)
             transformation = random.choice(["noise", "stretch", "pitch"])
             if transformation == "noise":
@@ -164,8 +171,7 @@ class Augment:
         spec = self.logspect_class(torch.tensor(augmented, dtype=torch.float32))
         return spec
 
-data_collator = DefaultDataCollator()
-ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
+
 
 class ASTForGenreClassification(PreTrainedModel):
     config_class = ASTGenreConfig
@@ -242,8 +248,7 @@ def objective(trial):
                                 conv_dim =sorted(conv_dim, reverse=True),
                                 normalisations = (normalisations[:num_layers_top])
                                 )
-       # wandb.init(project="ast_model", name=f"0wpc_more_hyper_{trial.number}", config= config
-        #)
+        wandb.init(project="ast_model", name=f"0wpc_augm_num_w{trial.number}", config= config)
     else:   
         config = ASTGenreConfig()
     model = ASTForGenreClassification(config=config, ast_model=ast_base)
@@ -258,6 +263,7 @@ def objective(trial):
     per_device_train_batch_size=2,
     per_device_eval_batch_size=2,
     learning_rate=3e-5,
+    dataloader_num_workers=4,
     num_train_epochs=50,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
@@ -288,54 +294,29 @@ def objective(trial):
     gc.collect()
     wandb.finish()
     return eval_result["eval_accuracy"]
-# def model_init(trial= None):
-#     if trial is not None:
-#         MAX_LAYERS = 4
-#         num_layers = trial.suggest_int("num_layers", 1,MAX_LAYERS)
-#         conv_dim = []
-#         dropouts = []
-#         for i in range (MAX_LAYERS):
-#             dropouts.append((trial.suggest_int(f"drop_out{i}", 0, 3))/ 10)
-#             conv_dim.append(trial.suggest_categorical(f"dim_{i}", [64, 128, 256]) )
-#         conv_dim = conv_dim[:num_layers -1]
-#         conv_dim.append(trial.suggest_categorical(f"dim_last", [32, 16]) )
-#         print("chose number of layers")
-#         print(f"num_layers: {num_layers}, conv_dim: {conv_dim[:num_layers]}")
-#         config = ASTGenreConfig(num_layers_top = num_layers,
-#                                 dropouts= sorted(dropouts[:num_layers], reverse=True),
-#                                 conv_dim =sorted(conv_dim, reverse=True)
-#                                 )
-#         # wandb.init(project="ast_model", name="0wpc_try", config=config
-#         # )
-#     else:   
-#         config = ASTGenreConfig()
-#     model = ASTForGenreClassification(config=config, ast_model=ast_base)
-#     if trial:
-#         print(f"hyperparameters chosen: num_layers = {num_layers}")
-#         summary(model)
-#     return model
 
-metric = evaluate.load("accuracy")
+
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=1)
     return metric.compute(predictions=predictions, references=labels)
 
+if __name__ == "__main__":
+   
+    data, tracks_path, labels  = get_audio()
+    le = LabelEncoder()
+    encoded_labels = le.fit_transform(labels)
+    train, test, train_labels, test_labels = train_test_split(
+            tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
+    train, validation, train_labels, validation_labels = train_test_split(
+            train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
+    transform = Augment()
+    train_dataset = GTZANSpectrogramDataset(train, train_labels,transform = transform, augment = True)
+    val_dataset = GTZANSpectrogramDataset(validation, validation_labels, transform = transform, augment = False)
 
-data, tracks_path, labels  = get_audio()
-le = LabelEncoder()
-encoded_labels = le.fit_transform(labels)
-train, test, train_labels, test_labels = train_test_split(
-        tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
-train, validation, train_labels, validation_labels = train_test_split(
-        train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
-transform = Augment()
-train_dataset = GTZANSpectrogramDataset(train, train_labels,transform = transform, augment = True)
-val_dataset = GTZANSpectrogramDataset(validation, validation_labels, transform = transform, augment = False)
-
-study = optuna.create_study(direction= "maximize")
-study.optimize(objective, n_trials = 10)
-best_trial = study.best_trial
-print("Best hyperparameters:", study.best_params)
-df = pd.DataFrame(study.best_params, index = ['i',])
-df.to_csv("best_hyp.csv")
+    study = optuna.create_study(direction= "maximize")
+    study.optimize(objective, n_trials = 10)
+    best_trial = study.best_trial
+    print("Best hyperparameters:", study.best_params)
+    df = pd.DataFrame(study.best_params, index = ['i',])
+    df.to_csv("best_hyp.csv")
