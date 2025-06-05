@@ -124,6 +124,7 @@ class Augment:
         
         # TODO: apply augmentation only with a certain probability
         if augment :
+            waveform = np.asarray(waveform, dtype=np.float32)
             transformation = random.choice(["noise", "stretch", "pitch"])
             if transformation == "noise":
                 noise_random = np.random.normal(0, 1, size = waveform.shape)
