@@ -78,7 +78,7 @@ class GTZANSpectrogramDataset(Dataset):
     def __init__(self, path, labels, transform = None, augment = False):
         self.paths = path
         self.labels = labels
-        self.max_time = 1020
+        self.max_time = 1020  # in order to match the input dimension
         self.data = data
         self.transform = transform
         self.augment = augment
@@ -94,6 +94,12 @@ class GTZANSpectrogramDataset(Dataset):
             spec = data[self.paths[idx]]
         if spec.ndim == 3 and spec.shape[0] == 1:
             spec = spec.squeeze(0)
+        if spec.shape[0] > self.max_time:
+            start = np.random.randint(0, spec.shape[0] - self.max_time)
+            spec = spec[start: start + self.max_time, :]
+        else:
+            pad_len = self.max_time - spec.shape[0]
+            spec = np.pad(spec, ((0, pad_len), (0,0)), mode = 'constant')
         spec = spec[:self.max_time, :]
         #spec = spec.float()
         spec = torch.tensor(spec, dtype=torch.float32)
@@ -103,7 +109,7 @@ class GTZANSpectrogramDataset(Dataset):
         return {"input_values": spec, "labels": int(label)}
     
 class Augment:
-    def __init__(self, augm_params = None, audio_sr = 22050, aug_sr = 44100, mel_params = None):
+    def __init__(self, audio_sr = 22050, aug_sr = 44100, mel_params = None, augm_params = None):
         self.audio_sr = audio_sr
         self.aug_sr=aug_sr            
         
@@ -127,14 +133,12 @@ class Augment:
         self.logspect_class = LogMelSpect(audio_sr, **self.mel_params)
         
     
-    def __call__(self, audio_path, augment = False):
+    def __call__(self, audio_path, augment = False, cut = False):
         waveform, sr = load_audio(audio_path)
         assert (
                     sr == self.audio_sr
                 ), f"Sample rate mismatch: {sr} != {self.audio_sr}"
         
-        # TODO: apply augmentation only with a certain probability
-        #augment = True if augment is True else random.choice([True, False])
         if augment and random.random() < 0.3:
             waveform = np.asarray(waveform, dtype=np.float32)
             transformation = random.choice(["noise", "stretch", "pitch"])
@@ -253,7 +257,7 @@ def objective(trial):
                                 conv_dim =sorted(conv_dim, reverse=True),
                                 normalisations = (normalisations[:num_layers_top])
                                 )
-        wandb.init(project="ast_model", name=f"0wpc_augm_num_w{trial.number}", config= config)
+        #wandb.init(project="ast_model", name=f"0wpc_augm_num_w{trial.number}", config= config)
     else:   
         config = ASTGenreConfig()
     model = ASTForGenreClassification(config=config, ast_model=ast_base)
@@ -268,7 +272,7 @@ def objective(trial):
     per_device_train_batch_size=2,
     per_device_eval_batch_size=2,
     learning_rate=3e-5,
-    dataloader_num_workers=8,
+    #dataloader_num_workers=8,
     num_train_epochs=50,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
