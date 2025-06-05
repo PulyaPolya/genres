@@ -30,6 +30,10 @@ import pandas as pd
 #from ray.tune.integration.wandb import WandbLogger
 from typing import Dict, List, Any
 import wandb
+import warnings
+import logging
+logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
+warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
 #data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
 
 
@@ -91,6 +95,7 @@ class GTZANSpectrogramDataset(Dataset):
         if spec.ndim == 3 and spec.shape[0] == 1:
             spec = spec.squeeze(0)
         spec = spec[:self.max_time, :]
+        #spec = spec.float()
         spec = torch.tensor(spec, dtype=torch.float32)
 
         #spec = spec.unsqueeze(0)
@@ -263,7 +268,7 @@ def objective(trial):
     per_device_train_batch_size=2,
     per_device_eval_batch_size=2,
     learning_rate=3e-5,
-    dataloader_num_workers=4,
+    dataloader_num_workers=8,
     num_train_epochs=50,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
