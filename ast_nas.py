@@ -35,7 +35,7 @@ import logging
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
 #data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
-
+W_PC = False
 
 metric = evaluate.load("accuracy")
 data_collator = DefaultDataCollator()
@@ -73,6 +73,9 @@ class ASTGenreConfig(ASTConfig):
         self.num_layers_top = kwargs.get("num_layers_top", 2)
         self.dropouts = kwargs.get("dropouts", [0.2]*self.num_layers_top)
         self.conv_dim = kwargs.get("conv_dim", [64]*self.num_layers_top)
+        self.gradient_accumulation_steps = kwargs.get("gradient_accumulation_steps", 8)
+        self.learning_rate = kwargs.get("learning_rate",3e-5 )
+        self.freeze_layers = kwargs.get("freeze_layers", None)
 
 class GTZANSpectrogramDataset(Dataset):
     def __init__(self, path, labels, transform = None, augment = False):
@@ -195,8 +198,13 @@ class ASTForGenreClassification(PreTrainedModel):
         self.normalisations = config.normalisations
         self.conv_dim = [768] +config.conv_dim
         self.activation_fn = nn.ReLU()
+        self.freeze_layers = config.freeze_layers
         layers = []
-        
+        if self.freeze_layers:
+            for i, layer in enumerate(self.ast.encoder.layer):
+                if i < self.freeze_layers:
+                    for param in layer.parameters():
+                        param.requires_grad = False
         # layers.append( nn.Sequential(nn.Conv1d(768, self.conv_dim[0], kernel_size=3, padding="same"),
         #               #self.normalisations[0],
         #               self.activation_fn,
@@ -250,12 +258,16 @@ def objective(trial):
             
         conv_dim = conv_dim[:num_layers_top -1]
         conv_dim.append(trial.suggest_categorical(f"dim_last", [32,64, 16]) )
+
         print("chose number of layers")
         print(f"num_layers: {num_layers_top}, conv_dim: {conv_dim[:num_layers_top]}")
         config = ASTGenreConfig(num_layers_top = num_layers_top,
                                 dropouts= sorted(dropouts[:num_layers_top], reverse=True),
                                 conv_dim =sorted(conv_dim, reverse=True),
-                                normalisations = (normalisations[:num_layers_top])
+                                normalisations = (normalisations[:num_layers_top]),
+                                gradient_accumulation_steps = trial.suggest_int(f"gradient_accumulation_steps", 2, 16, step = 2),
+                                learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
+                                freeze_layers = trial.suggest_int("freeze_layers", 0, 8)
                                 )
         #wandb.init(project="ast_model", name=f"0wpc_augm_num_w{trial.number}", config= config)
     else:   
@@ -271,13 +283,13 @@ def objective(trial):
     logging_strategy="epoch",
     per_device_train_batch_size=2,
     per_device_eval_batch_size=2,
-    learning_rate=3e-5,
+    learning_rate=config.learning_rate,
     #dataloader_num_workers=8,
     num_train_epochs=50,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
-    fp16=True,
-    gradient_accumulation_steps=8,
+    fp16=W_PC,
+    gradient_accumulation_steps=config.gradient_accumulation_steps,
     greater_is_better=True,
     report_to=None,
     push_to_hub=False,
@@ -312,7 +324,7 @@ def compute_metrics(eval_pred):
 
 if __name__ == "__main__":
    
-    data, tracks_path, labels  = get_audio()
+    data, tracks_path, labels  = get_audio(r"P:\datasets\beat-this\data\gtzan_old")
     le = LabelEncoder()
     encoded_labels = le.fit_transform(labels)
     train, test, train_labels, test_labels = train_test_split(
