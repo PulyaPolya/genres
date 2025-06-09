@@ -34,6 +34,8 @@ import warnings
 import logging
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
+import os
+os.environ["WANDB_MODE"] = "offline"
 #data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
 W_PC = False
 
@@ -56,7 +58,7 @@ def get_audio(data_path = None):
     labels = []
     track_paths = []
     data_path = data_path if data_path is not None else r"C:\Users\Kochana\projects\genres\data\gtzan_old\gtzan_old"
-    subfolders = [ f.path for f in os.scandir(data_path) if f.is_dir() ]
+    subfolders = [ f.path for f in  os.scandir(data_path) if f.is_dir() ]
     for dir in subfolders:
         onlyfiles = [join(dir, f) for f in listdir(dir) if isfile(join(dir, f))]
         labels.extend([dir.split("\\")[-1]]*len(onlyfiles))
@@ -267,9 +269,9 @@ def objective(trial):
                                 normalisations = (normalisations[:num_layers_top]),
                                 gradient_accumulation_steps = trial.suggest_int(f"gradient_accumulation_steps", 2, 16, step = 2),
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers = trial.suggest_int("freeze_layers", 0, 8)
+                                freeze_layers = None #trial.suggest_int("freeze_layers", 0, 8)
                                 )
-        #wandb.init(project="ast_model", name=f"0wpc_augm_num_w{trial.number}", config= config)
+        wandb.init(project="ast_model", name=f"0new_pc{trial.number}", config= config)
     else:   
         config = ASTGenreConfig()
     model = ASTForGenreClassification(config=config, ast_model=ast_base)
@@ -283,15 +285,15 @@ def objective(trial):
     logging_strategy="epoch",
     per_device_train_batch_size=2,
     per_device_eval_batch_size=2,
-    learning_rate=config.learning_rate,
-    #dataloader_num_workers=8,
+    learning_rate=3e-5,
+    dataloader_num_workers=3,
     num_train_epochs=50,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
     fp16=W_PC,
-    gradient_accumulation_steps=config.gradient_accumulation_steps,
+    gradient_accumulation_steps=8,
     greater_is_better=True,
-    report_to=None,
+    report_to=["wandb"],
     push_to_hub=False,
     #hub_model_id="polinaZaroko/ast_try_again",
     hub_strategy="checkpoint",
@@ -310,6 +312,7 @@ def objective(trial):
 )
     trainer.train()
     eval_result = trainer.evaluate()
+    wandb.log({"eval_accuracy": eval_result["eval_accuracy"]})
     del model, trainer
     torch.cuda.empty_cache()
     gc.collect()
@@ -324,7 +327,9 @@ def compute_metrics(eval_pred):
 
 if __name__ == "__main__":
    
-    data, tracks_path, labels  = get_audio(r"P:\datasets\beat-this\data\gtzan_old")
+    #waveform, sr = load_audio(r"C:\Users\Marina\genres\gtzan_old\gtzan_old\country\country.00012.wav")
+    
+    data, tracks_path, labels  = get_audio(r"C:\Users\Marina\genres\gtzan_old\gtzan_old")
     le = LabelEncoder()
     encoded_labels = le.fit_transform(labels)
     train, test, train_labels, test_labels = train_test_split(
