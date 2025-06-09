@@ -34,8 +34,8 @@ import warnings
 import logging
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
-import os
-os.environ["WANDB_MODE"] = "offline"
+# import os
+# os.environ["WANDB_MODE"] = "offline"
 #data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
 W_PC = False
 
@@ -78,6 +78,7 @@ class ASTGenreConfig(ASTConfig):
         self.gradient_accumulation_steps = kwargs.get("gradient_accumulation_steps", 8)
         self.learning_rate = kwargs.get("learning_rate",3e-5 )
         self.freeze_layers = kwargs.get("freeze_layers", None)
+        self.dropout = kwargs.get("dropout", 0)
 
 class GTZANSpectrogramDataset(Dataset):
     def __init__(self, path, labels, transform = None, augment = False):
@@ -193,36 +194,26 @@ class ASTForGenreClassification(PreTrainedModel):
     def __init__(self, config, ast_model=ast_base):
         super().__init__(config)
         self.ast = ast_model
-        
-        self.num_layers_top = config.num_layers_top
-        self.dropout = nn.Dropout(0.2)
-        self.dropouts = config.dropouts
-        self.normalisations = config.normalisations
-        self.conv_dim = [768] +config.conv_dim
-        self.activation_fn = nn.ReLU()
+        self.dropout = nn.Dropout(config.dropout)
+        self.activation_fn = self.get_activation(config.activation_fn)
         self.freeze_layers = config.freeze_layers
-        layers = []
+        self.classifier = nn.Linear(768, config.num_labels)
         if self.freeze_layers:
+            print(f"freezing {self.freeze_layers} layers")
             for i, layer in enumerate(self.ast.encoder.layer):
                 if i < self.freeze_layers:
                     for param in layer.parameters():
                         param.requires_grad = False
-        # layers.append( nn.Sequential(nn.Conv1d(768, self.conv_dim[0], kernel_size=3, padding="same"),
-        #               #self.normalisations[0],
-        #               self.activation_fn,
-        #               nn.Dropout(self.dropouts[0]),
-        #               ))
-        for i in range(self.num_layers_top):
-            #norm_type = self.normalisations[i]
-            layers.append( nn.Sequential(
-                nn.Conv1d(self.conv_dim[i], self.conv_dim[i+1], kernel_size=3, padding=1),
-                self.get_normalisation(self.normalisations[i], self.conv_dim[i+1]),
-                self.activation_fn,
-                nn.Dropout(self.dropouts[i])
-                    ))
-        self.hidden_layers = nn.ModuleList(layers)
-        print(self.hidden_layers)
-        self.classifier = nn.Linear(self.conv_dim[-1], config.num_labels)
+        
+
+    def get_activation(self, activation_fn) -> nn.Module:
+        acrivation_mapping = {
+        "relu":  nn.ReLU(),
+        "tanh":  nn.Tanh(),
+        "gelu":  nn.GELU(),
+        "none":  nn.Identity(),
+    }
+        return acrivation_mapping.get(activation_fn)
     def get_normalisation(self, norm_type, dim) -> nn.Module:
         norm_mapping = {
         "batch": lambda d: nn.BatchNorm1d(d),
@@ -233,12 +224,10 @@ class ASTForGenreClassification(PreTrainedModel):
     def forward(self, input_values, labels=None):
         x = self.ast.embeddings(input_values)
         x = self.ast.encoder(x).last_hidden_state
-         # or use x[:, 0, :]
-        x = x.transpose(1,2)
-        for layer in self.hidden_layers:
-            x = layer(x)
-        x = x.mean(dim=2) 
-        #x = self.dropout(x)
+        x = x.mean(dim=1)
+        x = self.dropout(x)
+        x = self.activation_fn(x)
+        logits = self.classifier(x)
         logits = self.classifier(x)
 
         loss = None
@@ -248,35 +237,25 @@ class ASTForGenreClassification(PreTrainedModel):
     
 def objective(trial):
     if trial is not None:
-        MAX_LAYERS = 4
-        num_layers_top = trial.suggest_int("num_layers_top", 1,MAX_LAYERS)
-        conv_dim = []
-        dropouts = []
-        normalisations = []
-        for i in range (MAX_LAYERS):
-            dropouts.append((trial.suggest_int(f"drop_out{i}", 0, 4))/ 10)
-            conv_dim.append(trial.suggest_categorical(f"dim_{i}", [64, 128, 256]) )
-            normalisations.append(trial.suggest_categorical(f"normalisation_{i}", ["batch", "none"]) )
-            
-        conv_dim = conv_dim[:num_layers_top -1]
-        conv_dim.append(trial.suggest_categorical(f"dim_last", [32,64, 16]) )
-
-        print("chose number of layers")
-        print(f"num_layers: {num_layers_top}, conv_dim: {conv_dim[:num_layers_top]}")
-        config = ASTGenreConfig(num_layers_top = num_layers_top,
-                                dropouts= sorted(dropouts[:num_layers_top], reverse=True),
-                                conv_dim =sorted(conv_dim, reverse=True),
-                                normalisations = (normalisations[:num_layers_top]),
+        config = ASTGenreConfig(
+                                activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "tanh", "none"]),
+                                dropout = trial.suggest_int(f"drop_out", 0, 4)/ 10,
                                 gradient_accumulation_steps = trial.suggest_int(f"gradient_accumulation_steps", 2, 16, step = 2),
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers = None #trial.suggest_int("freeze_layers", 0, 8)
+                                freeze_layers =trial.suggest_int("freeze_layers", 0, 8)
                                 )
-        wandb.init(project="ast_model", name=f"0new_pc{trial.number}", config= config)
+        wandb.init(project="ast_model", name=f"w_PC_freeze{trial.number}", config=
+                    {
+                        "activation_fn" : config.activation_fn,
+                        "dropout" : config.dropout, 
+                        "freeze_layers" :  config.freeze_layers
+
+                    })
     else:   
         config = ASTGenreConfig()
     model = ASTForGenreClassification(config=config, ast_model=ast_base)
     if trial:
-        print(f"hyperparameters chosen: num_layers = {num_layers_top}")
+        #print(f"hyperparameters chosen: num_layers = {num_layers_top}")
         summary(model)
     training_args = TrainingArguments(
     output_dir="./ast-gtzan_w_pc",
@@ -286,7 +265,7 @@ def objective(trial):
     per_device_train_batch_size=2,
     per_device_eval_batch_size=2,
     learning_rate=3e-5,
-    dataloader_num_workers=3,
+    dataloader_num_workers=8,
     num_train_epochs=50,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
@@ -325,11 +304,8 @@ def compute_metrics(eval_pred):
     predictions = np.argmax(logits, axis=1)
     return metric.compute(predictions=predictions, references=labels)
 
-if __name__ == "__main__":
-   
-    #waveform, sr = load_audio(r"C:\Users\Marina\genres\gtzan_old\gtzan_old\country\country.00012.wav")
-    
-    data, tracks_path, labels  = get_audio(r"C:\Users\Marina\genres\gtzan_old\gtzan_old")
+if __name__ == "__main__":    
+    data, tracks_path, labels  = get_audio()
     le = LabelEncoder()
     encoded_labels = le.fit_transform(labels)
     train, test, train_labels, test_labels = train_test_split(
