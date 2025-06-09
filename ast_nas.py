@@ -19,7 +19,7 @@ from transformers import DefaultDataCollator
 import evaluate
 from transformers import Trainer, TrainingArguments
 import os
-from transformers import EarlyStoppingCallback
+from transformers import EarlyStoppingCallback, TrainerCallback, TrainerState, TrainerControl
 from torchinfo import summary
 import optuna
 import gc
@@ -234,21 +234,42 @@ class ASTForGenreClassification(PreTrainedModel):
         if labels is not None:
             loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
         return SequenceClassifierOutput(loss=loss, logits=logits)
-    
+
+class EarlyStoppingBelowThresholdCallback (TrainerCallback):
+    def __init__(self, threshold = 0.2, patience = 3):
+        self.threshold = threshold
+        self.patience = patience
+        self.counter = 0
+    def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, metrics, **kwargs ):
+        acc = metrics.get("eval_accuracy", None)
+        if acc is not None:
+            if acc < self.threshold:
+                self.counter += 1
+                print(f"acc {acc} is  below threshold {self.threshold} with counter {self.counter}")
+                if self.counter >= self.patience:
+                    control.should_epoch_stop = True
+                    print(f"early stopping ")
+        else:
+            self.counter = 0
+        return control
+
+        
 def objective(trial):
     if trial is not None:
         config = ASTGenreConfig(
                                 activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "tanh", "none"]),
                                 dropout = trial.suggest_int(f"drop_out", 0, 4)/ 10,
-                                gradient_accumulation_steps = trial.suggest_int(f"gradient_accumulation_steps", 2, 16, step = 2),
+                                #gradient_accumulation_steps = trial.suggest_int(f"gradient_accumulation_steps", 2, 16, step = 2),
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
                                 freeze_layers =trial.suggest_int("freeze_layers", 0, 8)
                                 )
-        wandb.init(project="ast_model", name=f"w_PC_freeze{trial.number}", config=
+        wandb.init(project="ast_model", name=f"w_PC_lr+early{trial.number}", config=
                     {
                         "activation_fn" : config.activation_fn,
                         "dropout" : config.dropout, 
-                        "freeze_layers" :  config.freeze_layers
+                        "freeze_layers" :  config.freeze_layers,
+                        "learning_rate" : config.learning_rate,
+                        #"gradient_accumulation": config.gradient_accumulation_steps
 
                     })
     else:   
@@ -264,7 +285,7 @@ def objective(trial):
     logging_strategy="epoch",
     per_device_train_batch_size=2,
     per_device_eval_batch_size=2,
-    learning_rate=3e-5,
+    learning_rate=config.learning_rate,
     dataloader_num_workers=8,
     num_train_epochs=50,
     load_best_model_at_end=True,
@@ -287,7 +308,8 @@ def objective(trial):
     tokenizer=None,
     data_collator=data_collator,
     compute_metrics=compute_metrics,
-    callbacks=[EarlyStoppingCallback(early_stopping_patience=8)],
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=8),
+               EarlyStoppingBelowThresholdCallback(threshold=0.3, patience=3)],
 )
     trainer.train()
     eval_result = trainer.evaluate()
