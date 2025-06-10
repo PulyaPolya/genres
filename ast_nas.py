@@ -32,6 +32,8 @@ from typing import Dict, List, Any
 import wandb
 import warnings
 import logging
+import json
+from types import SimpleNamespace
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
 # import os
@@ -81,7 +83,7 @@ class ASTGenreConfig(ASTConfig):
         self.dropout = kwargs.get("dropout", 0)
 
 class GTZANSpectrogramDataset(Dataset):
-    def __init__(self, path, labels, transform = None, augment = False):
+    def __init__(self, path, data, labels, transform = None, augment = False):
         self.paths = path
         self.labels = labels
         self.max_time = 1020  # in order to match the input dimension
@@ -254,7 +256,7 @@ class EarlyStoppingBelowThresholdCallback (TrainerCallback):
         return control
 
         
-def objective(trial):
+def objective(trial, train_dataset, val_dataset):
     if trial is not None:
         config = ASTGenreConfig(
                                 activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "tanh", "none"]),
@@ -263,7 +265,7 @@ def objective(trial):
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
                                 freeze_layers =trial.suggest_int("freeze_layers", 0, 8)
                                 )
-        wandb.init(project="ast_model", name=f"w_PC_lr+early{trial.number}", config=
+        wandb.init(project="ast_model", name=f"w_PC_config{trial.number}", config=
                     {
                         "activation_fn" : config.activation_fn,
                         "dropout" : config.dropout, 
@@ -326,8 +328,15 @@ def compute_metrics(eval_pred):
     predictions = np.argmax(logits, axis=1)
     return metric.compute(predictions=predictions, references=labels)
 
-if __name__ == "__main__":    
-    data, tracks_path, labels  = get_audio()
+def main():
+    with open ("ast_training_params.json") as f:
+        config = json.load(f, object_hook=lambda d: SimpleNamespace(**d)) 
+    if config.audio_path:   
+        data, tracks_path, labels  = get_audio(config.audio_path)
+    elif config.spectrogram_path:
+        data, tracks_path, labels  = get_spectrograms(config.audio_path)
+    global W_PC
+    W_PC = config.W_PC
     le = LabelEncoder()
     encoded_labels = le.fit_transform(labels)
     train, test, train_labels, test_labels = train_test_split(
@@ -335,12 +344,14 @@ if __name__ == "__main__":
     train, validation, train_labels, validation_labels = train_test_split(
             train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
     transform = Augment()
-    train_dataset = GTZANSpectrogramDataset(train, train_labels,transform = transform, augment = True)
-    val_dataset = GTZANSpectrogramDataset(validation, validation_labels, transform = transform, augment = False)
+    train_dataset = GTZANSpectrogramDataset(train,data, train_labels,transform = transform, augment = True)
+    val_dataset = GTZANSpectrogramDataset(validation,data, validation_labels, transform = transform, augment = False)
 
     study = optuna.create_study(direction= "maximize")
-    study.optimize(objective, n_trials = 10)
+    study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset), n_trials = 10)
     best_trial = study.best_trial
     print("Best hyperparameters:", study.best_params)
     df = pd.DataFrame(study.best_params, index = ['i',])
     df.to_csv("best_hyp.csv")
+if __name__ == "__main__":
+    main()
