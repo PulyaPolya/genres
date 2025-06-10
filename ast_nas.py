@@ -99,7 +99,7 @@ class GTZANSpectrogramDataset(Dataset):
         if self.transform:
             spec =self.transform(self.paths[idx], self.augment)
         else:
-            spec = data[self.paths[idx]]
+            spec = self.data[self.paths[idx]]
         if spec.ndim == 3 and spec.shape[0] == 1:
             spec = spec.squeeze(0)
         if spec.shape[0] > self.max_time:
