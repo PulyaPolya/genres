@@ -256,7 +256,7 @@ class EarlyStoppingBelowThresholdCallback (TrainerCallback):
         return control
 
         
-def objective(trial, train_dataset, val_dataset):
+def objective(trial, train_dataset, val_dataset, params):
     if trial is not None:
         config = ASTGenreConfig(
                                 activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "tanh", "none"]),
@@ -265,7 +265,7 @@ def objective(trial, train_dataset, val_dataset):
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
                                 freeze_layers =trial.suggest_int("freeze_layers", 0, 8)
                                 )
-        wandb.init(project="ast_model", name=f"w_PC_config{trial.number}", config=
+        wandb.init(project="ast_model", name=f"{params.wandb_name}_{trial.number}", config=
                     {
                         "activation_fn" : config.activation_fn,
                         "dropout" : config.dropout, 
@@ -288,7 +288,7 @@ def objective(trial, train_dataset, val_dataset):
     per_device_train_batch_size=2,
     per_device_eval_batch_size=2,
     learning_rate=config.learning_rate,
-    dataloader_num_workers=8,
+    dataloader_num_workers=params.num_workers,
     num_train_epochs=50,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
@@ -348,7 +348,7 @@ def main():
     val_dataset = GTZANSpectrogramDataset(validation,data, validation_labels, transform = transform, augment = False)
 
     study = optuna.create_study(direction= "maximize")
-    study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset), n_trials = 10)
+    study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, params = config), n_trials = 10)
     best_trial = study.best_trial
     print("Best hyperparameters:", study.best_params)
     df = pd.DataFrame(study.best_params, index = ['i',])
