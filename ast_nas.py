@@ -33,6 +33,8 @@ import wandb
 import warnings
 import logging
 import json
+import soxr
+import torchaudio
 from types import SimpleNamespace
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
@@ -56,16 +58,23 @@ def get_spectrograms (data_path = None):
         labels.append(path[6:][:-12])
     return data, tracks_path, labels
 
-def get_audio(data_path = None):
+def get_audio(dataset_name, data_path = None):
     labels = []
     track_paths = []
-    data_path = data_path if data_path is not None else r"C:\Users\Kochana\projects\genres\data\gtzan_old\gtzan_old"
+    num_labels = 0
+    folders_to_ignore =['Childrenss','Religious', 'Comedy_and_Spoken_Word' ] if dataset_name == "1517" else []
+    #ata_path = data_path if data_path is not None else r"C:\Users\Kochana\projects\genres\data\gtzan_old\gtzan_old"
     subfolders = [ f.path for f in  os.scandir(data_path) if f.is_dir() ]
     for dir in subfolders:
-        onlyfiles = [join(dir, f) for f in listdir(dir) if isfile(join(dir, f))]
-        labels.extend([dir.split("\\")[-1]]*len(onlyfiles))
-        track_paths += onlyfiles
-    return data_path, track_paths, labels
+        label = dir.split("\\")[-1]
+        if label not in folders_to_ignore:
+            onlyfiles = [join(dir, f) for f in listdir(dir) if isfile(join(dir, f))]
+            labels.extend([label]*len(onlyfiles))
+            track_paths += onlyfiles
+            num_labels += 1
+        else:
+            print(f"skipping {label} genre")
+    return data_path, track_paths, labels, num_labels
 
 
 
@@ -73,7 +82,7 @@ class ASTGenreConfig(ASTConfig):
     model_type= "ast-genre_classification"
     def __init__(self, **kwargs):   # **kwargs: arbitrary number of key words arguments
         super().__init__(**kwargs)
-        self.num_labels =10
+        self.num_labels =kwargs.get("num_labels", 10)
         self.num_layers_top = kwargs.get("num_layers_top", 2)
         self.dropouts = kwargs.get("dropouts", [0.2]*self.num_layers_top)
         self.conv_dim = kwargs.get("conv_dim", [64]*self.num_layers_top)
@@ -98,6 +107,8 @@ class GTZANSpectrogramDataset(Dataset):
         #spec = self.spectrograms[idx]  # shape: (128, time)
         if self.transform:
             spec =self.transform(self.paths[idx], self.augment)
+            if spec is  None:
+                 return self.__getitem__((idx + 1) % len(self))
         else:
             spec = self.data[self.paths[idx]]
         if spec.ndim == 3 and spec.shape[0] == 1:
@@ -117,10 +128,10 @@ class GTZANSpectrogramDataset(Dataset):
         return {"input_values": spec, "labels": int(label)}
     
 class Augment:
-    def __init__(self, audio_sr = 22050, aug_sr = 44100, mel_params = None, augm_params = None):
-        self.audio_sr = audio_sr
+    def __init__(self, out_sr = 22050, aug_sr = 44100, mel_params = None, augm_params = None):
+        self.out_sr= out_sr
         self.aug_sr=aug_sr            
-        
+        self.max_len = 30
         default_mel_params = dict(
                         n_fft=1024,
                         hop_length=441,
@@ -138,15 +149,32 @@ class Augment:
             )
         self.mel_params = mel_params if mel_params is not None else default_mel_params
         self.augm_params = augm_params if augm_params is not None else default_augm_params
-        self.logspect_class = LogMelSpect(audio_sr, **self.mel_params)
+        self.logspect_class = LogMelSpect(self.out_sr, **self.mel_params)
         
     
     def __call__(self, audio_path, augment = False, cut = False):
-        waveform, sr = load_audio(audio_path)
-        assert (
-                    sr == self.audio_sr
-                ), f"Sample rate mismatch: {sr} != {self.audio_sr}"
-        
+        try:
+            #waveform, sr = load_audio(audio_path)
+            waveform, sr = torchaudio.load(audio_path, channels_first=False)
+        except Exception as e:
+            print(f"[WARN] Skipping unreadable file: {audio_path}. Reason: {e}")
+            return None
+        #print(f"with {audio_path} it works")
+        max_len_scaled = int(self.max_len *sr)
+        if waveform.ndim == 2 and waveform.shape[1] == 2:
+            waveform = waveform.mean(axis = 1)
+
+        if waveform.shape[-1] > max_len_scaled:
+            start = np.random.randint(0, waveform.shape[-1] - max_len_scaled)
+            waveform = waveform[..., start:start + max_len_scaled]
+        # assert (
+        #             sr == self.audio_sr
+        #         ), f"Sample rate mismatch: {sr} != {self.audio_sr}"
+        # if sr != self.audio_sr:
+        #     print(audio_path)
+        #     return None
+        # else:
+        #     print("alles gut")
         if augment and random.random() < 0.3:
             waveform = np.asarray(waveform, dtype=np.float32)
             transformation = random.choice(["noise", "stretch", "pitch"])
@@ -184,7 +212,10 @@ class Augment:
             # apply pedalboard
                 augmented = board(waveform, self.aug_sr)
         else:
-            augmented = waveform.copy()
+            augmented = waveform.clone()
+        if self.out_sr != sr:
+            #print(f"preprocessing {audio_path}")
+            augmented = soxr.resample(augmented, in_rate = sr, out_rate = self.out_sr)
         spec = self.logspect_class(torch.tensor(augmented, dtype=torch.float32))
         return spec
 
@@ -211,7 +242,7 @@ class ASTForGenreClassification(PreTrainedModel):
     def get_activation(self, activation_fn) -> nn.Module:
         acrivation_mapping = {
         "relu":  nn.ReLU(),
-        "tanh":  nn.Tanh(),
+       # "tanh":  nn.Tanh(),
         "gelu":  nn.GELU(),
         "none":  nn.Identity(),
     }
@@ -231,7 +262,7 @@ class ASTForGenreClassification(PreTrainedModel):
         x = self.activation_fn(x)
         logits = self.classifier(x)
         logits = self.classifier(x)
-
+        assert labels.max() < logits.shape[1], f"Invalid label {labels.max()} for {logits.shape[1]} classes"
         loss = None
         if labels is not None:
             loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
@@ -259,7 +290,8 @@ class EarlyStoppingBelowThresholdCallback (TrainerCallback):
 def objective(trial, train_dataset, val_dataset, params):
     if trial is not None:
         config = ASTGenreConfig(
-                                activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "tanh", "none"]),
+                                num_labels = params.num_labels, 
+                                activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
                                 dropout = trial.suggest_int(f"drop_out", 0, 4)/ 10,
                                 #gradient_accumulation_steps = trial.suggest_int(f"gradient_accumulation_steps", 2, 16, step = 2),
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
@@ -332,9 +364,10 @@ def main():
     with open ("ast_training_params.json") as f:
         config = json.load(f, object_hook=lambda d: SimpleNamespace(**d)) 
     if config.audio_path:   
-        data, tracks_path, labels  = get_audio(config.audio_path)
+        data, tracks_path, labels, num_labels  = get_audio(config.dataset_name, config.audio_path)
     elif config.spectrogram_path:
         data, tracks_path, labels  = get_spectrograms(config.audio_path)
+    config.num_labels = num_labels
     global W_PC
     W_PC = config.W_PC
     le = LabelEncoder()
@@ -343,6 +376,7 @@ def main():
             tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
     train, validation, train_labels, validation_labels = train_test_split(
             train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
+    len(le.classes_) == config.num_labels
     transform = Augment()
     train_dataset = GTZANSpectrogramDataset(train,data, train_labels,transform = transform, augment = True)
     val_dataset = GTZANSpectrogramDataset(validation,data, validation_labels, transform = transform, augment = False)
