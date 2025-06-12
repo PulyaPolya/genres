@@ -160,19 +160,19 @@ class Augment:
             print(f"[WARN] Skipping unreadable file: {audio_path}. Reason: {e}")
             return None
         #print(f"with {audio_path} it works")
-        max_len_scaled = int(self.max_len *sr)
-        if waveform.ndim == 3:
-            print(f"wtf is wrong with {audio_path}")
-            waveform = waveform.squeeze()
-        elif waveform.ndim == 2 and waveform.shape[1] == 2:
-            waveform = waveform.mean(axis = 1)
+        # max_len_scaled = int(self.max_len *sr)
+        # if waveform.ndim == 3:
+        #     print(f"wtf is wrong with {audio_path}")
+        #     waveform = waveform.squeeze()
+        # elif waveform.ndim == 2 and waveform.shape[1] == 2:
+        #     waveform = waveform.mean(axis = 1)
 
-        if waveform.shape[-1] > max_len_scaled:
-            start = np.random.randint(0, waveform.shape[-1] - max_len_scaled)
-            waveform = waveform[..., start:start + max_len_scaled]
-        # assert (
-        #             sr == self.audio_sr
-        #         ), f"Sample rate mismatch: {sr} != {self.audio_sr}"
+        # if waveform.shape[-1] > max_len_scaled:
+        #     start = np.random.randint(0, waveform.shape[-1] - max_len_scaled)
+        #     waveform = waveform[..., start:start + max_len_scaled]
+        assert (
+                    sr == self.out_sr
+                ), f"Sample rate mismatch: {sr} != {self.out_sr}"
         # if sr != self.audio_sr:
         #     print(audio_path)
         #     return None
@@ -216,9 +216,9 @@ class Augment:
                 augmented = board(waveform, self.aug_sr)
         else:
             augmented = waveform.copy()
-        if self.out_sr != sr:
-            #print(f"preprocessing {audio_path}")
-            augmented = soxr.resample(augmented, in_rate = sr, out_rate = self.out_sr)
+        # if self.out_sr != sr:
+        #     #print(f"preprocessing {audio_path}")
+        #     augmented = soxr.resample(augmented, in_rate = sr, out_rate = self.out_sr)
         spec = self.logspect_class(torch.tensor(augmented, dtype=torch.float32))
         return spec
 
@@ -300,15 +300,15 @@ def objective(trial, train_dataset, val_dataset, params):
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
                                 freeze_layers =trial.suggest_int("freeze_layers", 0, 8)
                                 )
-        wandb.init(project="ast_model", name=f"{params.wandb_name}_{trial.number}", config=
-                    {
-                        "activation_fn" : config.activation_fn,
-                        "dropout" : config.dropout, 
-                        "freeze_layers" :  config.freeze_layers,
-                        "learning_rate" : config.learning_rate,
-                        #"gradient_accumulation": config.gradient_accumulation_steps
+        # wandb.init(project="ast_model", name=f"{params.wandb_name}_{trial.number}", config=
+        #             {
+        #                 "activation_fn" : config.activation_fn,
+        #                 "dropout" : config.dropout, 
+        #                 "freeze_layers" :  config.freeze_layers,
+        #                 "learning_rate" : config.learning_rate,
+        #                 #"gradient_accumulation": config.gradient_accumulation_steps
 
-                    })
+        #             })
     else:   
         config = ASTGenreConfig()
     model = ASTForGenreClassification(config=config, ast_model=ast_base)
