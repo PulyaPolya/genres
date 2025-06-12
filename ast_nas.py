@@ -154,14 +154,17 @@ class Augment:
     
     def __call__(self, audio_path, augment = False, cut = False):
         try:
-            #waveform, sr = load_audio(audio_path)
-            waveform, sr = torchaudio.load(audio_path, channels_first=False)
+            waveform, sr = load_audio(audio_path)
+            #waveform, sr = torchaudio.load(audio_path, channels_first=False)
         except Exception as e:
             print(f"[WARN] Skipping unreadable file: {audio_path}. Reason: {e}")
             return None
         #print(f"with {audio_path} it works")
         max_len_scaled = int(self.max_len *sr)
-        if waveform.ndim == 2 and waveform.shape[1] == 2:
+        if waveform.ndim == 3:
+            print(f"wtf is wrong with {audio_path}")
+            waveform = waveform.squeeze()
+        elif waveform.ndim == 2 and waveform.shape[1] == 2:
             waveform = waveform.mean(axis = 1)
 
         if waveform.shape[-1] > max_len_scaled:
@@ -212,7 +215,7 @@ class Augment:
             # apply pedalboard
                 augmented = board(waveform, self.aug_sr)
         else:
-            augmented = waveform.clone()
+            augmented = waveform.copy()
         if self.out_sr != sr:
             #print(f"preprocessing {audio_path}")
             augmented = soxr.resample(augmented, in_rate = sr, out_rate = self.out_sr)
