@@ -33,16 +33,13 @@ import wandb
 import warnings
 import logging
 import json
-from tqdm import tqdm
 import soxr
 import torchaudio
 from types import SimpleNamespace
-os.environ["WANDB_MODE"] = "offline"
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
-# import os
-# os.environ["WANDB_MODE"] = "offline"
-#data_path = Path(r"P:\datasets\beat-this\data\audio\spectograms_npz\gtzan.npz")
+import os
+os.environ["WANDB_MODE"] = "offline"
 W_PC = False
 
 metric = evaluate.load("accuracy")
@@ -94,11 +91,11 @@ class ASTGenreConfig(ASTConfig):
         self.dropout = kwargs.get("dropout", 0)
 
 class GTZANSpectrogramDataset(Dataset):
-    def __init__(self, path, audio_dict, labels, transform = None, augment = False):
+    def __init__(self, path, data, labels, transform = None, augment = False):
         self.paths = path
         self.labels = labels
         self.max_time = 1020  # in order to match the input dimension
-        self.audio_dict = audio_dict
+        self.data = data
         self.transform = transform
         self.augment = augment
         
@@ -107,10 +104,8 @@ class GTZANSpectrogramDataset(Dataset):
 
     def __getitem__(self, idx):
         #spec = self.spectrograms[idx]  # shape: (128, time)
-        path = self.paths[idx]
-        waveform, sr = self.audio_dict[path]
         if self.transform:
-            spec =self.transform(waveform, sr, self.augment)
+            spec =self.transform(self.paths[idx], self.augment)
             if spec is  None:
                  return self.__getitem__((idx + 1) % len(self))
         else:
@@ -156,18 +151,16 @@ class Augment:
         self.logspect_class = LogMelSpect(self.out_sr, **self.mel_params)
         
     
-    def __call__(self, waveform, sr, augment = False, cut = False):
-        # try:
-        #     waveform, sr = load_audio(audio_path)
-        #     #waveform, sr = torchaudio.load(audio_path, channels_first=False)
-        # except Exception as e:
-        #     print(f"[WARN] Skipping unreadable file: {audio_path}. Reason: {e}")
-        #     return None
-        # assert (
-        #             sr == self.out_sr
-        #         ), f"Sample rate mismatch: {sr} != {self.out_sr}"
-        if waveform.ndim == 2 and waveform.shape[1] == 2:
-            waveform = waveform.mean(axis=1)
+    def __call__(self, audio_path, augment = False, cut = False):
+        try:
+            waveform, sr = load_audio(audio_path)
+            #waveform, sr = torchaudio.load(audio_path, channels_first=False)
+        except Exception as e:
+            print(f"[WARN] Skipping unreadable file: {audio_path}. Reason: {e}")
+            return None
+        assert (
+                    sr == self.out_sr
+                ), f"Sample rate mismatch: {sr} != {self.out_sr}"
         if augment and random.random() < 0.3:
             waveform = np.asarray(waveform, dtype=np.float32)
             transformation = random.choice(["noise", "stretch", "pitch"])
@@ -206,6 +199,9 @@ class Augment:
                 augmented = board(waveform, self.aug_sr)
         else:
             augmented = waveform.copy()
+        # if self.out_sr != sr:
+        #     #print(f"preprocessing {audio_path}")
+        #     augmented = soxr.resample(augmented, in_rate = sr, out_rate = self.out_sr)
         spec = self.logspect_class(torch.tensor(augmented, dtype=torch.float32))
         return spec
 
@@ -316,8 +312,7 @@ def objective(trial, train_dataset, val_dataset, params):
     metric_for_best_model="accuracy",
     fp16=W_PC,
     gradient_accumulation_steps=8,
-    greater_is_better=True,
-    report_to= None,#["wandb"],
+    greater_is_better=None,  #["wandb"],
     push_to_hub=False,
     #hub_model_id="polinaZaroko/ast_try_again",
     hub_strategy="checkpoint",
@@ -360,16 +355,6 @@ def main():
     config.num_labels = num_labels
     global W_PC
     W_PC = config.W_PC
-    transform = Augment()
-    loaded_data = {}
-    print(f"loading data from the {config.dataset_name} dataset")
-    for audio_path in tqdm(tracks_path):
-        try:
-            waveform, sr = load_audio(audio_path)
-            loaded_data[audio_path] = (waveform, sr)
-            #waveform, sr = torchaudio.load(audio_path, channels_first=False)
-        except Exception as e:
-            print(f"[WARN] Skipping unreadable file: {audio_path}. Reason: {e}") 
     le = LabelEncoder()
     encoded_labels = le.fit_transform(labels)
     train, test, train_labels, test_labels = train_test_split(
@@ -377,9 +362,9 @@ def main():
     train, validation, train_labels, validation_labels = train_test_split(
             train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
     len(le.classes_) == config.num_labels
-    
-    train_dataset = GTZANSpectrogramDataset(train,loaded_data, train_labels,transform = transform, augment = True)
-    val_dataset = GTZANSpectrogramDataset(validation,load_audio, validation_labels, transform = transform, augment = False)
+    transform = Augment()
+    train_dataset = GTZANSpectrogramDataset(train,data, train_labels,transform = transform, augment = True)
+    val_dataset = GTZANSpectrogramDataset(validation,data, validation_labels, transform = transform, augment = False)
 
     study = optuna.create_study(direction= "maximize")
     study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, params = config), n_trials = 10)
