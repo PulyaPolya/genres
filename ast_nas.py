@@ -39,8 +39,8 @@ from types import SimpleNamespace
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
 import os
-os.environ["WANDB_MODE"] = "offline"
-W_PC = False
+#os.environ["WANDB_MODE"] = "offline"
+W_PC = True
 
 metric = evaluate.load("accuracy")
 data_collator = DefaultDataCollator()
@@ -283,15 +283,15 @@ def objective(trial, train_dataset, val_dataset, params):
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
                                 freeze_layers =trial.suggest_int("freeze_layers", 0, 8)
                                 )
-        # wandb.init(project="ast_model", name=f"{params.wandb_name}_{trial.number}", config=
-        #             {
-        #                 "activation_fn" : config.activation_fn,
-        #                 "dropout" : config.dropout, 
-        #                 "freeze_layers" :  config.freeze_layers,
-        #                 "learning_rate" : config.learning_rate,
-        #                 #"gradient_accumulation": config.gradient_accumulation_steps
+        wandb.init(project="ast_model", name=f"{params.wandb_name}_{trial.number}", config=
+                    {
+                        "activation_fn" : config.activation_fn,
+                        "dropout" : config.dropout, 
+                        "freeze_layers" :  config.freeze_layers,
+                        "learning_rate" : config.learning_rate,
+                        #"gradient_accumulation": config.gradient_accumulation_steps
 
-        #             })
+                    })
     else:   
         config = ASTGenreConfig()
     model = ASTForGenreClassification(config=config, ast_model=ast_base)
@@ -312,7 +312,7 @@ def objective(trial, train_dataset, val_dataset, params):
     metric_for_best_model="accuracy",
     fp16=W_PC,
     gradient_accumulation_steps=8,
-    greater_is_better=None,  #["wandb"],
+    greater_is_better=["wandb"],
     push_to_hub=False,
     #hub_model_id="polinaZaroko/ast_try_again",
     hub_strategy="checkpoint",
