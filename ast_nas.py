@@ -24,7 +24,7 @@ from torchinfo import summary
 import optuna
 import gc
 from pedalboard import Pedalboard, PitchShift, time_stretch
-from beat_this.preprocessing import LogMelSpect, load_audio
+from beat_this.preprocessing import LogMelSpect #load_audio
 #from ray.train import Sca
 import pandas as pd
 #from ray.tune.integration.wandb import WandbLogger
@@ -161,10 +161,22 @@ class Augment:
         self.augm_params = augm_params if augm_params is not None else default_augm_params
         self.logspect_class = LogMelSpect(self.out_sr, **self.mel_params)
         
-    
+    def load_audio(self,path, dtype="float64"):
+        try:
+            waveform, samplerate = torchaudio.load(path, channels_first=False)
+            waveform = np.asanyarray(waveform.squeeze().numpy(), dtype=dtype)
+            return waveform, samplerate
+        except Exception:
+            # in case torchaudio fails, try soundfile
+            try:
+                import soundfile as sf
+
+                return sf.read(path, dtype=dtype)
+            except Exception:
+                raise RuntimeError(f'Could not load audio from "{path}".')
     def __call__(self, audio_path, augment = False, cut = False):
         try:
-            waveform, sr = load_audio(audio_path)
+            waveform, sr = self.load_audio(audio_path)
             #waveform, sr = torchaudio.load(audio_path, channels_first=False)
         except Exception as e:
             print(f"[WARN] Skipping unreadable file: {audio_path}. Reason: {e}")
