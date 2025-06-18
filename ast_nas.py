@@ -35,12 +35,23 @@ import logging
 import json
 import soxr
 import torchaudio
+from dataclasses import dataclass
 from types import SimpleNamespace
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
 import os
 #os.environ["WANDB_MODE"] = "offline"
 W_PC = True
+
+@dataclass
+class Config:
+    dataset_name : str
+    W_PC : bool = False
+    audio_path: str | None = None
+    spectrogram_path : str | None = None
+    wandb_name : str | None = None
+    num_workers : int = 0
+
 
 metric = evaluate.load("accuracy")
 data_collator = DefaultDataCollator()
@@ -247,7 +258,6 @@ class ASTForGenreClassification(PreTrainedModel):
         x = self.dropout(x)
         x = self.activation_fn(x)
         logits = self.classifier(x)
-        logits = self.classifier(x)
         assert labels.max() < logits.shape[1], f"Invalid label {labels.max()} for {logits.shape[1]} classes"
         loss = None
         if labels is not None:
@@ -283,15 +293,16 @@ def objective(trial, train_dataset, val_dataset, params):
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
                                 freeze_layers =trial.suggest_int("freeze_layers", 0, 8)
                                 )
-        wandb.init(project="ast_model", name=f"{params.wandb_name}_{trial.number}", config=
-                    {
-                        "activation_fn" : config.activation_fn,
-                        "dropout" : config.dropout, 
-                        "freeze_layers" :  config.freeze_layers,
-                        "learning_rate" : config.learning_rate,
-                        #"gradient_accumulation": config.gradient_accumulation_steps
+        if params.wandb_name:
+            wandb.init(project="ast_model", name=f"{params.wandb_name}_{trial.number}", config=
+                        {
+                            "activation_fn" : config.activation_fn,
+                            "dropout" : config.dropout, 
+                            "freeze_layers" :  config.freeze_layers,
+                            "learning_rate" : config.learning_rate,
+                            #"gradient_accumulation": config.gradient_accumulation_steps
 
-                    })
+                        })
     else:   
         config = ASTGenreConfig()
     model = ASTForGenreClassification(config=config, ast_model=ast_base)
@@ -347,12 +358,14 @@ def compute_metrics(eval_pred):
 
 def main():
     with open ("ast_training_params.json") as f:
-        config = json.load(f, object_hook=lambda d: SimpleNamespace(**d)) 
+        #config = json.load(f, object_hook=lambda d: SimpleNamespace(**d))
+        config_dict = json.load(f) 
+    config = Config(**config_dict)
     if config.audio_path:   
         data, tracks_path, labels, num_labels  = get_audio(config.dataset_name, config.audio_path)
     elif config.spectrogram_path:
-        data, tracks_path, labels  = get_spectrograms(config.audio_path)
-    config.num_labels = num_labels
+        data, tracks_path, labels  = get_spectrograms(config.spectrogram_path)
+    config.num_labels = num_labels 
     global W_PC
     W_PC = config.W_PC
     le = LabelEncoder()
@@ -361,7 +374,7 @@ def main():
             tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
     train, validation, train_labels, validation_labels = train_test_split(
             train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
-    len(le.classes_) == config.num_labels
+    
     transform = Augment()
     train_dataset = GTZANSpectrogramDataset(train,data, train_labels,transform = transform, augment = True)
     val_dataset = GTZANSpectrogramDataset(validation,data, validation_labels, transform = transform, augment = False)
