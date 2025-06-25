@@ -41,7 +41,18 @@ logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLeve
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
 import os
 #os.environ["WANDB_MODE"] = "offline"
-W_PC = True
+#W_PC = True
+gpu = torch.cuda.is_available()
+
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # For full reproducibility
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 @dataclass
 class Config:
@@ -50,14 +61,15 @@ class Config:
     audio_path: str | None = None
     spectrogram_path : str | None = None
     wandb_name : str | None = None
+    optuna_name : str | None = None
     num_workers : int = 0
 
 
 metric = evaluate.load("accuracy")
 data_collator = DefaultDataCollator()
 ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
-def get_spectrograms (data_path = None):
-    data_path = data_path if data_path is not None else Path(r"C:\Users\Kochana\projects\genres\data\gtzan\gtzan.npz")
+def get_spectrograms (data_path):
+    data_path = data_path 
     data = np.load(data_path)
     lst = data.files
     tracks_path = []
@@ -72,18 +84,18 @@ def get_audio(dataset_name, data_path = None):
     labels = []
     track_paths = []
     num_labels = 0
-    folders_to_ignore =['Childrenss','Religious', 'Comedy_and_Spoken_Word' ] if dataset_name == "1517" else []
+    #folders_to_ignore =['Childrenss','Religious', 'Comedy_and_Spoken_Word' ] if dataset_name == "1517" else []
     #ata_path = data_path if data_path is not None else r"C:\Users\Kochana\projects\genres\data\gtzan_old\gtzan_old"
     subfolders = [ f.path for f in  os.scandir(data_path) if f.is_dir() ]
     for dir in subfolders:
         label = dir.split("\\")[-1]
-        if label not in folders_to_ignore:
-            onlyfiles = [join(dir, f) for f in listdir(dir) if isfile(join(dir, f))]
-            labels.extend([label]*len(onlyfiles))
-            track_paths += onlyfiles
-            num_labels += 1
-        else:
-            print(f"skipping {label} genre")
+        #if label not in folders_to_ignore:
+        onlyfiles = [join(dir, f) for f in listdir(dir) if isfile(join(dir, f))]
+        labels.extend([label]*len(onlyfiles))
+        track_paths += onlyfiles
+        num_labels += 1
+        #else:
+            #print(f"skipping {label} genre")
     return data_path, track_paths, labels, num_labels
 
 
@@ -322,7 +334,7 @@ def objective(trial, train_dataset, val_dataset, params):
         #print(f"hyperparameters chosen: num_layers = {num_layers_top}")
         summary(model)
     training_args = TrainingArguments(
-    output_dir="./ast-gtzan_w_pc",
+    output_dir="./ast-gtzan_cluster",
     evaluation_strategy="epoch",
     save_strategy="epoch",
     logging_strategy="epoch",
@@ -333,13 +345,14 @@ def objective(trial, train_dataset, val_dataset, params):
     num_train_epochs=50,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
-    fp16=W_PC,
+    fp16=gpu,
     gradient_accumulation_steps=8,
     greater_is_better=["wandb"],
     push_to_hub=False,
     #hub_model_id="polinaZaroko/ast_try_again",
     hub_strategy="checkpoint",
     save_total_limit=2,
+    seed = 42,
     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
 )    
     trainer = Trainer(
@@ -355,7 +368,8 @@ def objective(trial, train_dataset, val_dataset, params):
 )
     trainer.train()
     eval_result = trainer.evaluate()
-    wandb.log({"eval_accuracy": eval_result["eval_accuracy"]})
+    if params.wandb_name:
+        wandb.log({"eval_accuracy": eval_result["eval_accuracy"]})
     del model, trainer
     torch.cuda.empty_cache()
     gc.collect()
@@ -369,6 +383,7 @@ def compute_metrics(eval_pred):
     return metric.compute(predictions=predictions, references=labels)
 
 def main():
+    print(torch.cuda.is_available())
     with open ("ast_training_params.json") as f:
         #config = json.load(f, object_hook=lambda d: SimpleNamespace(**d))
         config_dict = json.load(f) 
@@ -378,8 +393,9 @@ def main():
     elif config.spectrogram_path:
         data, tracks_path, labels  = get_spectrograms(config.spectrogram_path)
     config.num_labels = num_labels 
-    global W_PC
-    W_PC = config.W_PC
+    print(num_labels)
+    #global W_PC
+    #W_PC = config.W_PC
     le = LabelEncoder()
     encoded_labels = le.fit_transform(labels)
     train, test, train_labels, test_labels = train_test_split(
@@ -390,8 +406,18 @@ def main():
     transform = Augment()
     train_dataset = GTZANSpectrogramDataset(train,data, train_labels,transform = transform, augment = True)
     val_dataset = GTZANSpectrogramDataset(validation,data, validation_labels, transform = transform, augment = False)
-
-    study = optuna.create_study(direction= "maximize")
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
+    sampler = optuna.samplers.TPESampler(seed=42, 
+                                         multivariate=True,
+                                         warn_independent_sampling=False)
+    study = optuna.create_study(study_name=config.optuna_name,
+                                direction= "maximize",
+                                sampler = sampler,
+                                pruner = pruner,
+                                storage = "sqlite:///optuna.db",
+                                load_if_exists=True )
+    #study.optimize(make_objective(config_params, train_dataset, valid_dataset, test_dataset), n_trials=config_params.num_trials)
+    #study = optuna.create_study(direction= "maximize")
     study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, params = config), n_trials = 10)
     best_trial = study.best_trial
     print("Best hyperparameters:", study.best_params)
