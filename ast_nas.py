@@ -113,7 +113,7 @@ class ASTGenreConfig(ASTConfig):
         self.dropouts = kwargs.get("dropouts", 0.2)
         self.learning_rate = kwargs.get("learning_rate",3e-5 )
         self.freeze_layers = kwargs.get("freeze_layers", None)
-        self.dropout_top = kwargs.get("dropout", 0)
+        self.dropout_top = kwargs.get("dropout_top", 0)
 
 class GTZANSpectrogramDataset(Dataset):
     def __init__(self, path, data, labels, transform = None, augment = False):
@@ -314,7 +314,7 @@ def objective(trial, train_dataset, val_dataset, params):
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
                                 activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
-                                dropout_top = trial.suggest_int(f"drop_out", 1, 4)/ 10,
+                                dropout_top = trial.suggest_float(f"dropout_top", 0.0, 0.4),
                                 #gradient_accumulation_steps = trial.suggest_int(f"gradient_accumulation_steps", 2, 16, step = 2),
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
                                 freeze_layers =trial.suggest_int("freeze_layers", 0, 8)
