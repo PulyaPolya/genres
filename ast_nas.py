@@ -24,6 +24,8 @@ from torchinfo import summary
 import optuna
 import gc
 from pedalboard import Pedalboard, PitchShift, time_stretch
+import matplotlib
+matplotlib.use("Agg") 
 import matplotlib.pyplot as plt
 from beat_this.preprocessing import LogMelSpect #load_audio
 #from ray.train import Sca
@@ -388,7 +390,8 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     predictions = trainer.predict(val_dataset)
     y_pred = predictions.predictions.argmax(axis = 1)
     y_true = predictions.label_ids
-    genre_names = list(label_encoder.classes)
+    labels = list(label_encoder.classes_)
+    genre_names = [os.path.basename(label) for label in labels]
     cm = confusion_matrix(y_true, y_pred)
     fig, ax = plt.subplots(figsize=(10, 10))
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=genre_names)
@@ -396,6 +399,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     plt.title("Confusion Matrix")
     plt.savefig("confusion_matrix.pdf", bbox_inches="tight")
     plt.close()
+    genre_names = list(label_encoder.classes_)
     if params.wandb_name:
         wandb.log({"eval_accuracy": eval_result["eval_accuracy"],
                     "confusion_matrix": wandb.Image("confusion_matrix.pdf")})
@@ -427,7 +431,22 @@ def main():
     #W_PC = config.W_PC
     le = LabelEncoder()
     encoded_labels = le.fit_transform(labels)
-    classes = list(le.classes_)
+    #amount = 1000
+    #L = range(14)
+    #y_pred = [random.choice(L) for _ in range(amount)]
+    #y_true = [random.choice(L) for _ in range(amount)
+    """
+    labels = list(le.classes_)
+    genre_names = [os.path.basename(label) for label in labels]
+    cm = confusion_matrix(y_true, y_pred)
+    fig, ax = plt.subplots(figsize=(10, 10))
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=genre_names)
+    disp.plot(ax=ax, xticks_rotation=90, cmap="Blues", colorbar=False)
+    plt.title("Confusion Matrix")
+    plt.savefig("confusion_matrix.pdf", bbox_inches="tight")
+    plt.close()
+    """
+    #raise Exception("aaaa")
     train, test, train_labels, test_labels = train_test_split(
             tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
     train, validation, train_labels, validation_labels = train_test_split(
@@ -453,5 +472,6 @@ def main():
     print("Best hyperparameters:", study.best_params)
     df = pd.DataFrame(study.best_params, index = ['i',])
     df.to_csv("best_hyp.csv")
+    
 if __name__ == "__main__":
     main()
