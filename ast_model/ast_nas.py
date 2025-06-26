@@ -122,10 +122,6 @@ class ASTGenreConfig(ASTConfig):
         self.dropout_top = kwargs.get("dropout_top", 0)
 
 
-    
-
-
-
 
 class ASTForGenreClassification(PreTrainedModel):
     config_class = ASTGenreConfig
@@ -265,7 +261,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     trainer.train()
     eval_result = trainer.evaluate()
     
-    predictions = trainer.predict(val_dataset)
+    predictions = trainer.predict(train_dataset)
     y_pred = predictions.predictions.argmax(axis = 1)
     y_true = predictions.label_ids
     labels = list(label_encoder.classes_)
