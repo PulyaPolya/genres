@@ -57,17 +57,22 @@ def set_seed(seed=42):
 @dataclass
 class Config:
     dataset_name : str
-    W_PC : bool = False
+    RUN_NAS : bool = False              # run NAS or not
     audio_path: str | None = None
     spectrogram_path : str | None = None
     wandb_name : str | None = None
     optuna_name : str | None = None
-    num_workers : int = 0
+    num_workers : int = 0               # num workers for data loader
+    num_trials : int = 1                # num optuna trials
+    num_epochs : int = 10
+
+
 
 
 metric = evaluate.load("accuracy")
 data_collator = DefaultDataCollator()
 ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
+
 def get_spectrograms (data_path):
     data_path = data_path 
     data = np.load(data_path)
@@ -105,13 +110,10 @@ class ASTGenreConfig(ASTConfig):
     def __init__(self, **kwargs):   # **kwargs: arbitrary number of key words arguments
         super().__init__(**kwargs)
         self.num_labels =kwargs.get("num_labels", 10)
-        self.num_layers_top = kwargs.get("num_layers_top", 2)
-        self.dropouts = kwargs.get("dropouts", [0.2]*self.num_layers_top)
-        self.conv_dim = kwargs.get("conv_dim", [64]*self.num_layers_top)
-        self.gradient_accumulation_steps = kwargs.get("gradient_accumulation_steps", 8)
+        self.dropouts = kwargs.get("dropouts", 0.2)
         self.learning_rate = kwargs.get("learning_rate",3e-5 )
         self.freeze_layers = kwargs.get("freeze_layers", None)
-        self.dropout = kwargs.get("dropout", 0)
+        self.dropout_top = kwargs.get("dropout", 0)
 
 class GTZANSpectrogramDataset(Dataset):
     def __init__(self, path, data, labels, transform = None, augment = False):
@@ -248,7 +250,7 @@ class ASTForGenreClassification(PreTrainedModel):
     def __init__(self, config, ast_model=ast_base):
         super().__init__(config)
         self.ast = ast_model
-        self.dropout = nn.Dropout(config.dropout)
+        self.dropout = nn.Dropout(config.dropout_top)
         self.activation_fn = self.get_activation(config.activation_fn)
         self.freeze_layers = config.freeze_layers
         self.classifier = nn.Linear(768, config.num_labels)
@@ -312,16 +314,22 @@ def objective(trial, train_dataset, val_dataset, params):
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
                                 activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
-                                dropout = trial.suggest_int(f"drop_out", 0, 4)/ 10,
+                                dropout_top = trial.suggest_int(f"drop_out", 1, 4)/ 10,
                                 #gradient_accumulation_steps = trial.suggest_int(f"gradient_accumulation_steps", 2, 16, step = 2),
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
                                 freeze_layers =trial.suggest_int("freeze_layers", 0, 8)
                                 )
         if params.wandb_name:
-            wandb.init(project="ast_model", name=f"{params.wandb_name}_{trial.number}", config=
+            if params.RUN_NAS:
+                name = f"trial_{trial.number}"
+                group= params.wandb_name
+            else:
+                name = params.wandb_name
+                group = None
+            wandb.init(project="ast_model", name=name, group = group, config=
                         {
                             "activation_fn" : config.activation_fn,
-                            "dropout" : config.dropout, 
+                            "dropout" : config.dropout_top, 
                             "freeze_layers" :  config.freeze_layers,
                             "learning_rate" : config.learning_rate,
                             #"gradient_accumulation": config.gradient_accumulation_steps
@@ -332,6 +340,10 @@ def objective(trial, train_dataset, val_dataset, params):
     model = ASTForGenreClassification(config=config, ast_model=ast_base)
     if trial:
         #print(f"hyperparameters chosen: num_layers = {num_layers_top}")
+        hyperparams = {key : getattr(config, key) for key in ["num_labels", "activation_fn", "dropout_top", "learning_rate", "learning_rate", "freeze_layers"]}
+        hyperparams_df = pd.DataFrame.from_dict([hyperparams])
+        print("Chosen hyperparameters")
+        print(hyperparams_df)
         summary(model)
     training_args = TrainingArguments(
     output_dir="./ast-gtzan_cluster",
@@ -342,12 +354,13 @@ def objective(trial, train_dataset, val_dataset, params):
     per_device_eval_batch_size=2,
     learning_rate=config.learning_rate,
     dataloader_num_workers=params.num_workers,
-    num_train_epochs=50,
+    num_train_epochs=params.num_epochs,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
     fp16=gpu,
     gradient_accumulation_steps=8,
-    greater_is_better=["wandb"],
+    greater_is_better=True,
+    report_to = ["wandb"],
     push_to_hub=False,
     #hub_model_id="polinaZaroko/ast_try_again",
     hub_strategy="checkpoint",
@@ -418,7 +431,7 @@ def main():
                                 load_if_exists=True )
     #study.optimize(make_objective(config_params, train_dataset, valid_dataset, test_dataset), n_trials=config_params.num_trials)
     #study = optuna.create_study(direction= "maximize")
-    study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, params = config), n_trials = 10)
+    study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, params = config), n_trials = config.num_trials)
     best_trial = study.best_trial
     print("Best hyperparameters:", study.best_params)
     df = pd.DataFrame(study.best_params, index = ['i',])
