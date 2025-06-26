@@ -24,6 +24,7 @@ from torchinfo import summary
 import optuna
 import gc
 from pedalboard import Pedalboard, PitchShift, time_stretch
+import matplotlib.pyplot as plt
 from beat_this.preprocessing import LogMelSpect #load_audio
 #from ray.train import Sca
 import pandas as pd
@@ -37,6 +38,8 @@ import soxr
 import torchaudio
 from dataclasses import dataclass
 from types import SimpleNamespace
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
 import os
@@ -115,7 +118,7 @@ class ASTGenreConfig(ASTConfig):
         self.freeze_layers = kwargs.get("freeze_layers", None)
         self.dropout_top = kwargs.get("dropout_top", 0)
 
-class GTZANSpectrogramDataset(Dataset):
+class SpectrogramDataset(Dataset):
     def __init__(self, path, data, labels, transform = None, augment = False):
         self.paths = path
         self.labels = labels
@@ -309,7 +312,7 @@ class EarlyStoppingBelowThresholdCallback (TrainerCallback):
         return control
 
         
-def objective(trial, train_dataset, val_dataset, params):
+def objective(trial, train_dataset, val_dataset, params, label_encoder):
     if trial is not None:
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
@@ -381,8 +384,21 @@ def objective(trial, train_dataset, val_dataset, params):
 )
     trainer.train()
     eval_result = trainer.evaluate()
+    
+    predictions = trainer.predict(val_dataset)
+    y_pred = predictions.predictions.argmax(axis = 1)
+    y_true = predictions.label_ids
+    genre_names = list(label_encoder.classes)
+    cm = confusion_matrix(y_true, y_pred)
+    fig, ax = plt.subplots(figsize=(10, 10))
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=genre_names)
+    disp.plot(ax=ax, xticks_rotation=90, cmap="Blues", colorbar=False)
+    plt.title("Confusion Matrix")
+    plt.savefig("confusion_matrix.pdf", bbox_inches="tight")
+    plt.close()
     if params.wandb_name:
-        wandb.log({"eval_accuracy": eval_result["eval_accuracy"]})
+        wandb.log({"eval_accuracy": eval_result["eval_accuracy"],
+                    "confusion_matrix": wandb.Image("confusion_matrix.pdf")})
     del model, trainer
     torch.cuda.empty_cache()
     gc.collect()
@@ -411,14 +427,15 @@ def main():
     #W_PC = config.W_PC
     le = LabelEncoder()
     encoded_labels = le.fit_transform(labels)
+    classes = list(le.classes_)
     train, test, train_labels, test_labels = train_test_split(
             tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
     train, validation, train_labels, validation_labels = train_test_split(
             train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
     
     transform = Augment()
-    train_dataset = GTZANSpectrogramDataset(train,data, train_labels,transform = transform, augment = True)
-    val_dataset = GTZANSpectrogramDataset(validation,data, validation_labels, transform = transform, augment = False)
+    train_dataset = SpectrogramDataset(train,data, train_labels,transform = transform, augment = True)
+    val_dataset = SpectrogramDataset(validation,data, validation_labels, transform = transform, augment = False)
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
     sampler = optuna.samplers.TPESampler(seed=42, 
                                          multivariate=True,
@@ -431,7 +448,7 @@ def main():
                                 load_if_exists=True )
     #study.optimize(make_objective(config_params, train_dataset, valid_dataset, test_dataset), n_trials=config_params.num_trials)
     #study = optuna.create_study(direction= "maximize")
-    study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, params = config), n_trials = config.num_trials)
+    study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, params = config, label_encoder = le), n_trials = config.num_trials)
     best_trial = study.best_trial
     print("Best hyperparameters:", study.best_params)
     df = pd.DataFrame(study.best_params, index = ['i',])
