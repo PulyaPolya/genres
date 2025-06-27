@@ -8,6 +8,7 @@ from sklearn.model_selection import StratifiedGroupKFold
 from pedalboard import Pedalboard, PitchShift, time_stretch
 import soxr
 import pandas as pd
+import soundfile as sf
 import os
 from os import listdir
 from os.path import isfile, join
@@ -53,10 +54,11 @@ class SpectrogramDataset(Dataset):
     
 
 class Augment:
-    def __init__(self, out_sr = 22050, aug_sr = 44100, mel_params = None, augm_params = None):
+    def __init__(self, out_sr = 22050, aug_sr = 44100, mel_params = None, augm_params = None, augment_prob = 0.3):
         self.out_sr= out_sr
         self.aug_sr=aug_sr            
         self.max_len = 30
+        self.augment_prob = augment_prob
         default_mel_params = dict(
                         n_fft=1024,
                         hop_length=441,
@@ -84,8 +86,6 @@ class Augment:
         except Exception:
             # in case torchaudio fails, try soundfile
             try:
-                import soundfile as sf
-
                 return sf.read(path, dtype=dtype)
             except Exception:
                 raise RuntimeError(f'Could not load audio from "{path}".')
@@ -99,7 +99,7 @@ class Augment:
         assert (
                     sr == self.out_sr
                 ), f"Sample rate mismatch: {sr} != {self.out_sr}"
-        if augment and random.random() < 0.3:
+        if augment and random.random() < self.augment_prob:
             waveform = np.asarray(waveform, dtype=np.float32)
             transformation = random.choice(["noise", "stretch", "pitch"])
             if transformation == "noise":

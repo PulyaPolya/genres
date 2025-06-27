@@ -188,7 +188,6 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
                                 num_labels = params.num_labels, 
                                 activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
                                 dropout_top = trial.suggest_float(f"dropout_top", 0.0, 0.4),
-                                #gradient_accumulation_steps = trial.suggest_int(f"gradient_accumulation_steps", 2, 16, step = 2),
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
                                 freeze_layers =trial.suggest_int("freeze_layers", 0, 8)
                                 )
