@@ -187,7 +187,22 @@ class EarlyStoppingBelowThresholdCallback (TrainerCallback):
             self.counter = 0
         return control
 
-        
+def get_confusion_matrix(predictions, label_encoder):
+    y_pred = predictions.predictions.argmax(axis = 1)
+    y_true = predictions.label_ids
+    labels = list(label_encoder.classes_)
+    genre_names = [os.path.basename(label) for label in labels]
+    cm = confusion_matrix(y_true, y_pred)
+    fig, ax = plt.subplots(figsize=(10, 10))
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=genre_names)
+    disp.plot(ax=ax, xticks_rotation=90, cmap="Blues", colorbar=False)
+    plt.title("Confusion Matrix")
+    plt.savefig("confusion_matrix.pdf", bbox_inches="tight")
+    plt.close()
+    genre_names = list(label_encoder.classes_)
+
+
+
 def objective(trial, train_dataset, val_dataset, params, label_encoder):
     if trial is not None:
         config = ASTGenreConfig(
@@ -229,8 +244,8 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     evaluation_strategy="epoch",
     save_strategy="epoch",
     logging_strategy="epoch",
-    per_device_train_batch_size=2,
-    per_device_eval_batch_size=2,
+    per_device_train_batch_size=4,
+    per_device_eval_batch_size=4,
     learning_rate=config.learning_rate,
     dataloader_num_workers=params.num_workers,
     num_train_epochs=params.num_epochs,
@@ -260,8 +275,10 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
 )
     trainer.train()
     eval_result = trainer.evaluate()
-    
-    predictions = trainer.predict(train_dataset)
+    # getting confusion matrix 
+    predictions = trainer.predict(val_dataset)
+    get_confusion_matrix(predictions, label_encoder)
+    """
     y_pred = predictions.predictions.argmax(axis = 1)
     y_true = predictions.label_ids
     labels = list(label_encoder.classes_)
@@ -274,9 +291,11 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     plt.savefig("confusion_matrix.pdf", bbox_inches="tight")
     plt.close()
     genre_names = list(label_encoder.classes_)
+    """
     if params.wandb_name:
-        wandb.log({"eval_accuracy": eval_result["eval_accuracy"],
-                    "confusion_matrix": wandb.Image("confusion_matrix.pdf")})
+        wandb.log({"eval_accuracy": eval_result["eval_accuracy"]
+                    #"confusion_matrix": wandb.Image("confusion_matrix.pdf")
+                    })
     del model, trainer
     torch.cuda.empty_cache()
     gc.collect()
@@ -305,21 +324,6 @@ def main():
     #W_PC = config.W_PC
     le = LabelEncoder()
     encoded_labels = le.fit_transform(labels)
-    #amount = 1000
-    #L = range(14)
-    #y_pred = [random.choice(L) for _ in range(amount)]
-    #y_true = [random.choice(L) for _ in range(amount)
-    """
-    labels = list(le.classes_)
-    genre_names = [os.path.basename(label) for label in labels]
-    cm = confusion_matrix(y_true, y_pred)
-    fig, ax = plt.subplots(figsize=(10, 10))
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=genre_names)
-    disp.plot(ax=ax, xticks_rotation=90, cmap="Blues", colorbar=False)
-    plt.title("Confusion Matrix")
-    plt.savefig("confusion_matrix.pdf", bbox_inches="tight")
-    plt.close()
-    """
     #raise Exception("aaaa")
     train, test, train_labels, test_labels = train_test_split(
             tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
@@ -339,8 +343,6 @@ def main():
                                 pruner = pruner,
                                 storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
-    #study.optimize(make_objective(config_params, train_dataset, valid_dataset, test_dataset), n_trials=config_params.num_trials)
-    #study = optuna.create_study(direction= "maximize")
     study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, params = config, label_encoder = le), n_trials = config.num_trials)
     best_trial = study.best_trial
     print("Best hyperparameters:", study.best_params)
