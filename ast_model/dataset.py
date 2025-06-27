@@ -17,13 +17,14 @@ import random
 from beat_this.preprocessing import LogMelSpect #load_audio
 
 class SpectrogramDataset(Dataset):
-    def __init__(self, path, labels, transform = None, augment = False):
+    def __init__(self, path, labels, transform = None, augment = False, state= "train"):
         self.paths = path
         self.labels = labels
         self.max_time = 1020  # in order to match the input dimension
         #self.data = data
         self.transform = transform
         self.augment = augment
+        self.state = state
         
     def __len__(self):
         return len(self.paths)
@@ -39,12 +40,18 @@ class SpectrogramDataset(Dataset):
         if spec.ndim == 3 and spec.shape[0] == 1:
             spec = spec.squeeze(0)
         if spec.shape[0] > self.max_time:
-            start = np.random.randint(0, spec.shape[0] - self.max_time)
+            if self.state == "train":
+                # randomly choose where to crop the fixed length during training 
+                start = np.random.randint(0, spec.shape[0] - self.max_time) 
+                
+            else:
+                # always take the center piece during validation and testing
+                start = (spec.shape[0] - self.max_time) // 2
             spec = spec[start: start + self.max_time, :]
         else:
             pad_len = self.max_time - spec.shape[0]
             spec = np.pad(spec, ((0, pad_len), (0,0)), mode = 'constant')
-        spec = spec[:self.max_time, :]
+        #spec = spec[:self.max_time, :]
         #spec = spec.float()
         spec = torch.tensor(spec, dtype=torch.float32)
 
@@ -57,7 +64,7 @@ class Augment:
     def __init__(self, out_sr = 22050, aug_sr = 44100, mel_params = None, augm_params = None, augment_prob = 0.3):
         self.out_sr= out_sr
         self.aug_sr=aug_sr            
-        self.max_len = 30
+        #self.max_len = 30
         self.augment_prob = augment_prob
         default_mel_params = dict(
                         n_fft=1024,
@@ -149,7 +156,6 @@ class ArtistSplit:
         if not  os.path.isfile(dataset_csv):
             df = self.create_dataset_df(save_path=dataset_csv)
         self.dataset_csv = dataset_csv
-        #self.dataset_csv = dataset_csv
     
     def get_artist(self,filename):
         file_path = os.path.join(self.root, filename)
@@ -182,14 +188,10 @@ class ArtistSplit:
         return dataset_df
     
     def get_labels(self):
-        # if not  os.path.isfile(csv_path):
-        #     df = self.create_dataset_df(save_path=csv_path)
         df = pd.read_csv(self.dataset_csv)
         labels = list(df.genre.values)
         return labels
     def create_splits(self):        # the main function here that does the job
-        # if not  os.path.isfile(csv_path):
-        #     df = self.create_dataset_df(save_path=csv_path)
         df = pd.read_csv(self.dataset_csv)
         #Create splitter that stratifies on 'genre' and groups by 'artist'
         sgkf = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)

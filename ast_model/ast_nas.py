@@ -46,15 +46,16 @@ def set_seed(seed=42):
 class Config:
     dataset_name : str
     RUN_NAS : bool = False              # run NAS or not
-    audio_path: str | None = None
     dataset_table: str = "dataset_table.csv"   # path to store the dataset table
-    spectrogram_path : str | None = None
+    data_path : str | None = None
+    data_type : str | None = None
     wandb_name : str | None = None
     optuna_name : str | None = None
     num_workers : int = 0               # num workers for data loader
     num_trials : int = 1                # num optuna trials
     num_epochs : int = 10
     batch_size : int = 2
+    hf_token : str | None = None
 
 
 metric = evaluate.load("accuracy")
@@ -278,25 +279,19 @@ def main():
         #config = json.load(f, object_hook=lambda d: SimpleNamespace(**d))
         config_dict = json.load(f) 
     config = Config(**config_dict)
-    # if config.audio_path:   
-    #     data, tracks_path, labels, num_labels  = get_audio(config.audio_path)
-    # elif config.spectrogram_path:
-    #     data, tracks_path, labels  = get_spectrograms(config.spectrogram_path)
-    split_artists = ArtistSplit(config.audio_path, config.dataset_table)
+    # if config.data_type == "spectrogram":
+    # # if config.audio_path:   
+    # #     data, tracks_path, labels, num_labels  = get_audio(config.audio_path)
+    #      data, tracks_path, labels  = get_spectrograms(config.spectrogram_path)
+    split_artists = ArtistSplit(config.data_path, config.dataset_table)
     labels = split_artists.get_labels()
     le = LabelEncoder()
     le.fit(labels)
     config.num_labels = len(le.classes_) 
     train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits()
     train_labels_enc = le.transform(train_labels)
-    val_labels_enc = le.transform(val_labels)
-    #encoded_labels = le.fit_transform(labels)
-    #raise Exception("aaaa")
-    # train, test, train_labels, test_labels = train_test_split(
-    #         tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
-    # train, validation, train_labels, validation_labels = train_test_split(
-    #         train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
-    
+    val_labels_enc = le.transform(val_labels)    
+    # adding augmentation class applied to the training data
     transform = Augment()
     train_dataset = SpectrogramDataset(train_paths, train_labels_enc,transform = transform, augment = True)
     val_dataset = SpectrogramDataset(val_paths, val_labels_enc, transform = transform, augment = False)
