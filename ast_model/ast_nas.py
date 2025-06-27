@@ -1,53 +1,35 @@
-from transformers import PreTrainedModel
+from transformers import PreTrainedModel, DefaultDataCollator, ASTModel, ASTConfig,  Trainer, TrainingArguments
+from transformers import EarlyStoppingCallback, TrainerCallback, TrainerState, TrainerControl
 from transformers.modeling_outputs import SequenceClassifierOutput
 import torch.nn as nn
 import torch.nn.functional as F
 import random
 from os import listdir
 from os.path import isfile, join
-from transformers import PretrainedConfig
-from torch.utils.data import DataLoader
-from transformers import ASTConfig
 from sklearn.preprocessing import LabelEncoder
-import numpy as np
-from pathlib import Path
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+import numpy as np
 import torch
-from torch.utils.data import Dataset
-from transformers import ASTModel
-from transformers import DefaultDataCollator
 import evaluate
-from transformers import Trainer, TrainingArguments
 import os
-from transformers import EarlyStoppingCallback, TrainerCallback, TrainerState, TrainerControl
 from torchinfo import summary
 import optuna
 import gc
-from pedalboard import Pedalboard, PitchShift, time_stretch
 import matplotlib
 matplotlib.use("Agg") 
 import matplotlib.pyplot as plt
-from beat_this.preprocessing import LogMelSpect #load_audio
-#from ray.train import Sca
 import pandas as pd
-#from ray.tune.integration.wandb import WandbLogger
-from typing import Dict, List, Any
 import wandb
 import warnings
 import logging
 import json
-import soxr
-import torchaudio
 from dataclasses import dataclass
-from types import SimpleNamespace
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-from dataset import Augment, SpectrogramDataset
+from dataset import Augment, SpectrogramDataset, ArtistSplit
 
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
-import os
 #os.environ["WANDB_MODE"] = "offline"
-#W_PC = True
 gpu = torch.cuda.is_available()
 
 def set_seed(seed=42):
@@ -65,14 +47,14 @@ class Config:
     dataset_name : str
     RUN_NAS : bool = False              # run NAS or not
     audio_path: str | None = None
+    dataset_table: str | None = None    # path to store the dataset table
     spectrogram_path : str | None = None
     wandb_name : str | None = None
     optuna_name : str | None = None
     num_workers : int = 0               # num workers for data loader
     num_trials : int = 1                # num optuna trials
     num_epochs : int = 10
-
-
+    batch_size : int = 2
 
 
 metric = evaluate.load("accuracy")
@@ -91,12 +73,10 @@ def get_spectrograms (data_path):
         labels.append(path[6:][:-12])
     return data, tracks_path, labels
 
-def get_audio(dataset_name, data_path = None):
+def get_audio(data_path = None):
     labels = []
     track_paths = []
     num_labels = 0
-    #folders_to_ignore =['Childrenss','Religious', 'Comedy_and_Spoken_Word' ] if dataset_name == "1517" else []
-    #ata_path = data_path if data_path is not None else r"C:\Users\Kochana\projects\genres\data\gtzan_old\gtzan_old"
     subfolders = [ f.path for f in  os.scandir(data_path) if f.is_dir() ]
     for dir in subfolders:
         label = dir.split("\\")[-1]
@@ -169,8 +149,8 @@ class ASTForGenreClassification(PreTrainedModel):
             loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
         return SequenceClassifierOutput(loss=loss, logits=logits)
 
-class EarlyStoppingBelowThresholdCallback (TrainerCallback):
-    def __init__(self, threshold = 0.2, patience = 3):
+class EarlyStoppingBelowThresholdCallback (TrainerCallback):      # quickly discard models that result in very low accuracy, potentially due to bad 
+    def __init__(self, threshold = 0.2, patience = 3):            # learning rate choice
         self.threshold = threshold
         self.patience = patience
         self.counter = 0
@@ -200,7 +180,6 @@ def get_confusion_matrix(predictions, label_encoder):
     plt.savefig("confusion_matrix.pdf", bbox_inches="tight")
     plt.close()
     genre_names = list(label_encoder.classes_)
-
 
 
 def objective(trial, train_dataset, val_dataset, params, label_encoder):
@@ -244,8 +223,8 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     evaluation_strategy="epoch",
     save_strategy="epoch",
     logging_strategy="epoch",
-    per_device_train_batch_size=4,
-    per_device_eval_batch_size=4,
+    per_device_train_batch_size=params.batch_size,
+    per_device_eval_batch_size=params.batch_size,
     learning_rate=config.learning_rate,
     dataloader_num_workers=params.num_workers,
     num_train_epochs=params.num_epochs,
@@ -314,25 +293,28 @@ def main():
         #config = json.load(f, object_hook=lambda d: SimpleNamespace(**d))
         config_dict = json.load(f) 
     config = Config(**config_dict)
-    if config.audio_path:   
-        data, tracks_path, labels, num_labels  = get_audio(config.dataset_name, config.audio_path)
-    elif config.spectrogram_path:
-        data, tracks_path, labels  = get_spectrograms(config.spectrogram_path)
-    config.num_labels = num_labels 
-    print(num_labels)
-    #global W_PC
-    #W_PC = config.W_PC
+    # if config.audio_path:   
+    #     data, tracks_path, labels, num_labels  = get_audio(config.audio_path)
+    # elif config.spectrogram_path:
+    #     data, tracks_path, labels  = get_spectrograms(config.spectrogram_path)
+    split_artists = ArtistSplit(config.audio_path, config.dataset_table)
+    labels = split_artists.get_labels()
     le = LabelEncoder()
-    encoded_labels = le.fit_transform(labels)
+    le.fit(labels)
+    config.num_labels = len(le.classes_) 
+    train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits()
+    train_labels_enc = le.transform(train_labels)
+    val_labels_enc = le.transform(val_labels)
+    #encoded_labels = le.fit_transform(labels)
     #raise Exception("aaaa")
-    train, test, train_labels, test_labels = train_test_split(
-            tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
-    train, validation, train_labels, validation_labels = train_test_split(
-            train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
+    # train, test, train_labels, test_labels = train_test_split(
+    #         tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
+    # train, validation, train_labels, validation_labels = train_test_split(
+    #         train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
     
     transform = Augment()
-    train_dataset = SpectrogramDataset(train,data, train_labels,transform = transform, augment = True)
-    val_dataset = SpectrogramDataset(validation,data, validation_labels, transform = transform, augment = False)
+    train_dataset = SpectrogramDataset(train_paths, train_labels_enc,transform = transform, augment = True)
+    val_dataset = SpectrogramDataset(val_paths, val_labels_enc, transform = transform, augment = False)
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
     sampler = optuna.samplers.TPESampler(seed=42, 
                                          multivariate=True,

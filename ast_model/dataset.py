@@ -4,17 +4,22 @@ from torch.utils.data import DataLoader
 import numpy as np
 from pathlib import Path
 import torch
+from sklearn.model_selection import StratifiedGroupKFold
 from pedalboard import Pedalboard, PitchShift, time_stretch
 import soxr
+import pandas as pd
+import os
+from os import listdir
+from os.path import isfile, join
 import torchaudio
 import random
 from beat_this.preprocessing import LogMelSpect #load_audio
 class SpectrogramDataset(Dataset):
-    def __init__(self, path, data, labels, transform = None, augment = False):
+    def __init__(self, path, labels, transform = None, augment = False):
         self.paths = path
         self.labels = labels
         self.max_time = 1020  # in order to match the input dimension
-        self.data = data
+        #self.data = data
         self.transform = transform
         self.augment = augment
         
@@ -136,3 +141,78 @@ class Augment:
         #     augmented = soxr.resample(augmented, in_rate = sr, out_rate = self.out_sr)
         spec = self.logspect_class(torch.tensor(augmented, dtype=torch.float32))
         return spec
+    
+class ArtistSplit:
+    def __init__(self, root, dataset_csv):
+        self.root = root
+        if not  os.path.isfile(dataset_csv):
+            df = self.create_dataset_df(save_path=dataset_csv)
+        self.dataset_csv = dataset_csv
+        #self.dataset_csv = dataset_csv
+    
+    def get_artist(self,filename):
+        file_path = os.path.join(self.root, filename)
+        if "___" in filename:
+            artist = filename.split("___")[0]
+        elif "-" in filename:
+            artist = filename.split("-")[0]
+        else:
+            raise ValueError(f"Can not extract artist from the file {file_path}")
+        return artist
+    
+    def create_dataset_df(self, save_path = None):
+        header = ["title",  "genre", "artist", "filepath"]
+        dataset_table =dict((el,[]) for el in header)
+        subfolders = [ f.path for f in os.scandir(self.root) if f.is_dir() ]  
+        for folder in subfolders:
+            genre = os.path.basename(folder)
+            for f in listdir(folder) :
+                file = join(folder, f)
+                if isfile(file):
+                    dataset_table["title"].append(f)
+                    dataset_table["filepath"].append(file)
+                    dataset_table["genre"].append(genre)
+                    artist = self.get_artist(f)
+                    dataset_table["artist"].append(artist)
+
+        dataset_df = pd.DataFrame.from_dict(dataset_table)
+        if save_path:
+            dataset_df.to_csv(save_path)
+        return dataset_df
+    
+    def get_labels(self):
+        # if not  os.path.isfile(csv_path):
+        #     df = self.create_dataset_df(save_path=csv_path)
+        df = pd.read_csv(self.dataset_csv)
+        labels = list(df.genre.values)
+        return labels
+    def create_splits(self):        # the main function here that does the job
+        # if not  os.path.isfile(csv_path):
+        #     df = self.create_dataset_df(save_path=csv_path)
+        df = pd.read_csv(self.dataset_csv)
+        #Create splitter that stratifies on 'genre' and groups by 'artist'
+        sgkf = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
+
+        # Get the first split: trainval vs test -> 80 / 20 split
+        for trainval_idx, test_idx in sgkf.split(df, df['genre'], groups=df['artist']):   # sgkf makes sure that one artist can't end up in
+            df_trainval = df.iloc[trainval_idx]                                           # multiple splits
+            df_test = df.iloc[test_idx]
+            break       # only take the first fold
+        # Get the second split: train vs val -> 80 / 20 split
+        for train_idx, val_idx in sgkf.split(df_trainval, df_trainval['genre'], groups=df_trainval['artist']):
+            df_train = df_trainval.iloc[train_idx]
+            df_val = df_trainval.iloc[val_idx]
+            break       # only take the first fold
+        # check that splits indeed don't intersect
+        artist_train =set(df_train["artist"])
+        artist_val = set(df_val["artist"])
+        artist_test = set(df_test["artist"])
+        intersection =bool (artist_test & artist_train or artist_train & artist_val or artist_val & artist_test) 
+        assert not intersection, "Artists shouldn't intersect"
+        # now we only return arrays that contain file paths and corresponding labels
+        result =  []
+        for df_split in [df_train, df_val, df_test]:
+            result.extend([df_split["filepath"].tolist(), df_split["genre"].tolist()])
+        train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = result
+        return train_paths, train_labels, val_paths, val_labels, test_paths, test_labels
+        
