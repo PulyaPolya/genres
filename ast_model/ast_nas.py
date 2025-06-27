@@ -47,7 +47,7 @@ class Config:
     dataset_name : str
     RUN_NAS : bool = False              # run NAS or not
     audio_path: str | None = None
-    dataset_table: str | None = None    # path to store the dataset table
+    dataset_table: str = "dataset_table.csv"   # path to store the dataset table
     spectrogram_path : str | None = None
     wandb_name : str | None = None
     optuna_name : str | None = None
@@ -257,20 +257,6 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     # getting confusion matrix 
     predictions = trainer.predict(val_dataset)
     get_confusion_matrix(predictions, label_encoder)
-    """
-    y_pred = predictions.predictions.argmax(axis = 1)
-    y_true = predictions.label_ids
-    labels = list(label_encoder.classes_)
-    genre_names = [os.path.basename(label) for label in labels]
-    cm = confusion_matrix(y_true, y_pred)
-    fig, ax = plt.subplots(figsize=(10, 10))
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=genre_names)
-    disp.plot(ax=ax, xticks_rotation=90, cmap="Blues", colorbar=False)
-    plt.title("Confusion Matrix")
-    plt.savefig("confusion_matrix.pdf", bbox_inches="tight")
-    plt.close()
-    genre_names = list(label_encoder.classes_)
-    """
     if params.wandb_name:
         wandb.log({"eval_accuracy": eval_result["eval_accuracy"]
                     #"confusion_matrix": wandb.Image("confusion_matrix.pdf")
