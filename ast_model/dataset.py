@@ -17,7 +17,7 @@ import random
 from beat_this.preprocessing import LogMelSpect #load_audio
 
 class SpectrogramDataset(Dataset):
-    def __init__(self, path, labels, transform = None, augment = False, state= "train"):
+    def __init__(self, path, labels, label_names_set, transform = None, augment = False, state= "train"):
         self.paths = path
         self.labels = labels
         self.max_time = 1020  # in order to match the input dimension
@@ -25,6 +25,7 @@ class SpectrogramDataset(Dataset):
         self.transform = transform
         self.augment = augment
         self.state = state
+        self.labels_names_set = label_names_set # storing the genre names 
         
     def __len__(self):
         return len(self.paths)

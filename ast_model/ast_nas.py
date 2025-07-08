@@ -56,6 +56,7 @@ class Config:
     num_epochs : int = 10
     batch_size : int = 2
     hf_token : str | None = None
+    hf_model_id : str | None = None
 
 
 metric = evaluate.load("accuracy")
@@ -185,12 +186,16 @@ def get_confusion_matrix(predictions, label_encoder):
 
 def objective(trial, train_dataset, val_dataset, params, label_encoder):
     if trial is not None:
+        id2label = {i: label for i, label in enumerate(train_dataset.labels_names_set)}
+        label2id = {label: i for i, label in enumerate(train_dataset.labels_names_set)}
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
                                 activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
                                 dropout_top = trial.suggest_float(f"dropout_top", 0.0, 0.4),
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers =trial.suggest_int("freeze_layers", 0, 8)
+                                freeze_layers =trial.suggest_int("freeze_layers", 0, 8),
+                                id2label=id2label,
+                                label2id=label2id,
                                 )
         if params.wandb_name:
             if params.RUN_NAS:
@@ -234,10 +239,10 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
-    push_to_hub=False,
-    #hub_model_id="polinaZaroko/ast_try_again",
-    hub_strategy="checkpoint",
-    save_total_limit=2,
+    push_to_hub=True,
+    hub_model_id=params.hf_model_id,
+    #hub_strategy="checkpoint",
+    save_total_limit=1,
     seed = 42,
     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
 )    
@@ -280,21 +285,39 @@ def main():
         config_dict = json.load(f) 
     config = Config(**config_dict)
     # if config.data_type == "spectrogram":
-    # # if config.audio_path:   
-    # #     data, tracks_path, labels, num_labels  = get_audio(config.audio_path)
-    #      data, tracks_path, labels  = get_spectrograms(config.spectrogram_path)
-    split_artists = ArtistSplit(config.data_path, config.dataset_table)
-    labels = split_artists.get_labels()
+    # # # if config.audio_path:   
+    # # #     data, tracks_path, labels, num_labels  = get_audio(config.audio_path)
+    # #      data, tracks_path, labels  = get_spectrograms(config.spectrogram_path)
+    # split_artists = ArtistSplit(config.data_path, config.dataset_table)
+    # labels = split_artists.get_labels()
+    # le = LabelEncoder()
+    # le.fit(labels)
+    # config.num_labels = len(le.classes_) 
+    # train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits()
+    # train_labels_enc = le.transform(train_labels)
+    # val_labels_enc = le.transform(val_labels)    
+    if config.data_path:   
+        data, tracks_path, labels, num_labels  = get_audio( config.data_path)
+    # elif config.spectrogram_path:
+    #     data, tracks_path, labels  = get_spectrograms(config.spectrogram_path)
+    config.num_labels = num_labels 
+    label_names_set = set(labels)
+    print(num_labels)
+    
+    #global W_PC
+    #W_PC = config.W_PC
     le = LabelEncoder()
-    le.fit(labels)
-    config.num_labels = len(le.classes_) 
-    train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits()
-    train_labels_enc = le.transform(train_labels)
-    val_labels_enc = le.transform(val_labels)    
+    encoded_labels = le.fit_transform(labels)
     # adding augmentation class applied to the training data
     transform = Augment()
-    train_dataset = SpectrogramDataset(train_paths, train_labels_enc,transform = transform, augment = True)
-    val_dataset = SpectrogramDataset(val_paths, val_labels_enc, transform = transform, augment = False)
+    train, test, train_labels, test_labels = train_test_split(
+            tracks_path, encoded_labels, test_size=0.8, stratify=encoded_labels, random_state=42)
+    train, validation, train_labels, validation_labels = train_test_split(
+            train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
+    train_dataset = SpectrogramDataset(train, train_labels,  label_names_set =  label_names_set,transform = transform, augment = True)
+    val_dataset = SpectrogramDataset(validation,validation_labels,label_names_set =  label_names_set, transform = transform, augment = False)
+    # train_dataset = SpectrogramDataset(train_paths, train_labels_enc,transform = transform, augment = True)
+    # val_dataset = SpectrogramDataset(val_paths, val_labels_enc, transform = transform, augment = False)
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
     sampler = optuna.samplers.TPESampler(seed=42, 
                                          multivariate=True,
