@@ -25,6 +25,7 @@ import warnings
 import logging
 import json
 from dataclasses import dataclass
+from transformers import AutoModelForSequenceClassification
 from dataset import Augment, SpectrogramDataset, ArtistSplit
 
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
@@ -241,7 +242,8 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     report_to = ["wandb"],
     push_to_hub=True,
     hub_model_id=params.hf_model_id,
-    #hub_strategy="checkpoint",
+    #hub_strategy="end",  
+    hub_strategy="checkpoint",
     save_total_limit=1,
     seed = 42,
     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
@@ -311,7 +313,7 @@ def main():
     # adding augmentation class applied to the training data
     transform = Augment()
     train, test, train_labels, test_labels = train_test_split(
-            tracks_path, encoded_labels, test_size=0.8, stratify=encoded_labels, random_state=42)
+            tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
     train, validation, train_labels, validation_labels = train_test_split(
             train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
     train_dataset = SpectrogramDataset(train, train_labels,  label_names_set =  label_names_set,transform = transform, augment = True)
@@ -335,4 +337,6 @@ def main():
     df.to_csv("best_hyp.csv")
     
 if __name__ == "__main__":
-    main()
+    model =   ASTForGenreClassification.from_pretrained("./ast-gtzan_cluster/checkpoint-1575")
+    model.push_to_hub("PolinaKozarovytska/ast")
+    #main()
