@@ -1,8 +1,5 @@
 from transformers import PreTrainedModel, DefaultDataCollator, ASTModel, ASTConfig,  Trainer, TrainingArguments
 from transformers import EarlyStoppingCallback, TrainerCallback, TrainerState, TrainerControl
-from transformers.modeling_outputs import SequenceClassifierOutput
-import torch.nn as nn
-import torch.nn.functional as F
 import random
 from os import listdir
 from os.path import isfile, join
@@ -27,7 +24,7 @@ import json
 from dataclasses import dataclass
 from transformers import AutoModelForSequenceClassification
 from dataset import Augment, SpectrogramDataset, ArtistSplit
-
+from model import ASTGenreConfig, ASTForGenreClassification
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
 #os.environ["WANDB_MODE"] = "offline"
@@ -62,7 +59,7 @@ class Config:
 
 metric = evaluate.load("accuracy")
 data_collator = DefaultDataCollator()
-ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
+
 
 def get_spectrograms (data_path):
     data_path = data_path 
@@ -93,64 +90,6 @@ def get_audio(data_path = None):
     return data_path, track_paths, labels, num_labels
 
 
-
-class ASTGenreConfig(ASTConfig):
-    model_type= "ast-genre_classification"
-    def __init__(self, **kwargs):   # **kwargs: arbitrary number of key words arguments
-        super().__init__(**kwargs)
-        self.num_labels =kwargs.get("num_labels", 10)
-        self.dropouts = kwargs.get("dropouts", 0.2)
-        self.learning_rate = kwargs.get("learning_rate",3e-5 )
-        self.freeze_layers = kwargs.get("freeze_layers", None)
-        self.dropout_top = kwargs.get("dropout_top", 0)
-
-
-
-class ASTForGenreClassification(PreTrainedModel):
-    config_class = ASTGenreConfig
-
-    def __init__(self, config, ast_model=ast_base):
-        super().__init__(config)
-        self.ast = ast_model
-        self.dropout = nn.Dropout(config.dropout_top)
-        self.activation_fn = self.get_activation(config.activation_fn)
-        self.freeze_layers = config.freeze_layers
-        self.classifier = nn.Linear(768, config.num_labels)
-        if self.freeze_layers:
-            print(f"freezing {self.freeze_layers} layers")
-            for i, layer in enumerate(self.ast.encoder.layer):
-                if i < self.freeze_layers:
-                    for param in layer.parameters():
-                        param.requires_grad = False
-        
-
-    def get_activation(self, activation_fn) -> nn.Module:
-        acrivation_mapping = {
-        "relu":  nn.ReLU(),
-       # "tanh":  nn.Tanh(),
-        "gelu":  nn.GELU(),
-        "none":  nn.Identity(),
-    }
-        return acrivation_mapping.get(activation_fn)
-    def get_normalisation(self, norm_type, dim) -> nn.Module:
-        norm_mapping = {
-        "batch": lambda d: nn.BatchNorm1d(d),
-        "layer": lambda d: nn.LayerNorm(d),
-        "none": lambda d: nn.Identity(),
-    }
-        return norm_mapping.get(norm_type, lambda d: nn.Identity())(dim)
-    def forward(self, input_values, labels=None):
-        x = self.ast.embeddings(input_values)
-        x = self.ast.encoder(x).last_hidden_state
-        x = x.mean(dim=1)
-        x = self.dropout(x)
-        x = self.activation_fn(x)
-        logits = self.classifier(x)
-        assert labels.max() < logits.shape[1], f"Invalid label {labels.max()} for {logits.shape[1]} classes"
-        loss = None
-        if labels is not None:
-            loss = F.cross_entropy(logits, labels, label_smoothing=0.1)
-        return SequenceClassifierOutput(loss=loss, logits=logits)
 
 class EarlyStoppingBelowThresholdCallback (TrainerCallback):      # quickly discard models that result in very low accuracy, potentially due to bad 
     def __init__(self, threshold = 0.2, patience = 3):            # learning rate choice
@@ -216,7 +155,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
                         })
     else:   
         config = ASTGenreConfig()
-    model = ASTForGenreClassification(config=config, ast_model=ast_base)
+    model = ASTForGenreClassification(config=config)
     if trial:
         #print(f"hyperparameters chosen: num_layers = {num_layers_top}")
         hyperparams = {key : getattr(config, key) for key in ["num_labels", "activation_fn", "dropout_top", "learning_rate", "learning_rate", "freeze_layers"]}
@@ -240,7 +179,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
-    push_to_hub=True,
+    push_to_hub=False,
     hub_model_id=params.hf_model_id,
     #hub_strategy="end",  
     hub_strategy="checkpoint",
@@ -290,34 +229,29 @@ def main():
     # # # if config.audio_path:   
     # # #     data, tracks_path, labels, num_labels  = get_audio(config.audio_path)
     # #      data, tracks_path, labels  = get_spectrograms(config.spectrogram_path)
-    # split_artists = ArtistSplit(config.data_path, config.dataset_table)
-    # labels = split_artists.get_labels()
-    # le = LabelEncoder()
-    # le.fit(labels)
-    # config.num_labels = len(le.classes_) 
-    # train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits()
-    # train_labels_enc = le.transform(train_labels)
-    # val_labels_enc = le.transform(val_labels)    
-    if config.data_path:   
-        data, tracks_path, labels, num_labels  = get_audio( config.data_path)
-    # elif config.spectrogram_path:
-    #     data, tracks_path, labels  = get_spectrograms(config.spectrogram_path)
-    config.num_labels = num_labels 
-    label_names_set = set(labels)
-    print(num_labels)
-    
-    #global W_PC
-    #W_PC = config.W_PC
+    split_artists = ArtistSplit(config.data_path, config.dataset_table)
+    labels = split_artists.get_labels()
     le = LabelEncoder()
-    encoded_labels = le.fit_transform(labels)
+    le.fit(labels)
+    config.num_labels = len(le.classes_) 
+    train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits()
+    train_labels_enc = le.transform(train_labels)
+    val_labels_enc = le.transform(val_labels)    
+    # if config.data_path:   
+    #     data, tracks_path, labels, num_labels  = get_audio( config.data_path)
+    # elif config.spectrogram_path:
+    #     data, tracks_path, labels  = get_spectrograms(config.spectrogram_path) 
+    label_names_set = set(labels)
+    le = LabelEncoder()
+    #encoded_labels = le.fit_transform(labels)
     # adding augmentation class applied to the training data
     transform = Augment()
-    train, test, train_labels, test_labels = train_test_split(
-            tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
-    train, validation, train_labels, validation_labels = train_test_split(
-            train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
-    train_dataset = SpectrogramDataset(train, train_labels,  label_names_set =  label_names_set,transform = transform, augment = True)
-    val_dataset = SpectrogramDataset(validation,validation_labels,label_names_set =  label_names_set, transform = transform, augment = False)
+    # train, test, train_labels, test_labels = train_test_split(
+    #         tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
+    # train, validation, train_labels, validation_labels = train_test_split(
+    #         train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
+    train_dataset = SpectrogramDataset(train_paths, train_labels_enc, label_names_set = label_names_set,transform = transform, augment = True)
+    val_dataset = SpectrogramDataset(val_paths, val_labels_enc, label_names_set= label_names_set, transform = transform, augment = False)
     # train_dataset = SpectrogramDataset(train_paths, train_labels_enc,transform = transform, augment = True)
     # val_dataset = SpectrogramDataset(val_paths, val_labels_enc, transform = transform, augment = False)
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
