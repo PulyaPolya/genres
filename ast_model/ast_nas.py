@@ -242,7 +242,6 @@ def main():
     # elif config.spectrogram_path:
     #     data, tracks_path, labels  = get_spectrograms(config.spectrogram_path) 
     label_names_set = set(labels)
-    le = LabelEncoder()
     #encoded_labels = le.fit_transform(labels)
     # adding augmentation class applied to the training data
     transform = Augment()

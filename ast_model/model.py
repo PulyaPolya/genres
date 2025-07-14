@@ -22,7 +22,7 @@ class ASTForGenreClassification(PreTrainedModel):
         super().__init__(config)
         self.ast = ast_model
         self.dropout = nn.Dropout(config.dropout_top)
-        #self.activation_fn = self.get_activation(config.activation_fn)
+        self.activation_fn = self.get_activation(config.activation_fn)
         self.freeze_layers = config.freeze_layers
         self.classifier = nn.Linear(768, config.num_labels)
         if self.freeze_layers:
@@ -53,7 +53,7 @@ class ASTForGenreClassification(PreTrainedModel):
         x = self.ast.encoder(x).last_hidden_state
         x = x.mean(dim=1)
         x = self.dropout(x)
-        #x = self.activation_fn(x)
+        x = self.activation_fn(x)
         logits = self.classifier(x)
         assert labels.max() < logits.shape[1], f"Invalid label {labels.max()} for {logits.shape[1]} classes"
         loss = None
