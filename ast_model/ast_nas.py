@@ -337,6 +337,6 @@ def main():
     df.to_csv("best_hyp.csv")
     
 if __name__ == "__main__":
-    model =   ASTForGenreClassification.from_pretrained("./ast-gtzan_cluster/checkpoint-1575")
-    model.push_to_hub("PolinaKozarovytska/ast")
-    #main()
+    # model =   ASTForGenreClassification.from_pretrained("./ast-gtzan_cluster/checkpoint-1575")
+    # model.push_to_hub("PolinaKozarovytska/ast")
+    main()
