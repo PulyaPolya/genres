@@ -132,6 +132,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
                                 num_labels = params.num_labels, 
                                 activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
                                 normalisation = trial.suggest_categorical("normalisation", [ "layer", "none"]),
+                                batch_size = trial.suggest_categorical("batch_size", [ 4, 8, 16, 32, 64]),
                                 dropout_top = trial.suggest_float(f"dropout_top", 0.0, 0.4),
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
                                 freeze_layers =trial.suggest_int("freeze_layers", 0, 10),
@@ -152,6 +153,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
                             "dropout" : config.dropout_top, 
                             "freeze_layers" :  config.freeze_layers,
                             "learning_rate" : config.learning_rate,
+                            "batch_size" : config.batch_size
                             #"gradient_accumulation": config.gradient_accumulation_steps
 
                         })
@@ -160,7 +162,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     model = ASTForGenreClassification(config=config)
     if trial:
         #print(f"hyperparameters chosen: num_layers = {num_layers_top}")
-        hyperparams = {key : getattr(config, key) for key in ["num_labels", "activation_fn", "dropout_top", "learning_rate", "learning_rate", "freeze_layers", "normalisation"]}
+        hyperparams = {key : getattr(config, key) for key in ["num_labels", "activation_fn", "dropout_top", "learning_rate", "learning_rate", "freeze_layers", "normalisation", "batch_size"]} #"normalisation"
         hyperparams_df = pd.DataFrame.from_dict([hyperparams])
         print("Chosen hyperparameters")
         print(hyperparams_df)
@@ -170,15 +172,15 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     evaluation_strategy="epoch",
     save_strategy="epoch",
     logging_strategy="epoch",
-    per_device_train_batch_size=params.batch_size,
-    per_device_eval_batch_size=params.batch_size,
+    per_device_train_batch_size=config.batch_size,
+    per_device_eval_batch_size=config.batch_size,
     learning_rate=config.learning_rate,
     dataloader_num_workers=params.num_workers,
     num_train_epochs=params.num_epochs,
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
     fp16=gpu,
-    gradient_accumulation_steps=8,
+    #gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
     push_to_hub=False,
@@ -204,7 +206,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     eval_result = trainer.evaluate()
     # getting confusion matrix 
     predictions = trainer.predict(val_dataset)
-    get_confusion_matrix(predictions, label_encoder)
+    #get_confusion_matrix(predictions, label_encoder)
     if params.wandb_name:
         wandb.log({"eval_accuracy": eval_result["eval_accuracy"]
                     #"confusion_matrix": wandb.Image("confusion_matrix.pdf")
@@ -251,8 +253,8 @@ def main():
     #         tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
     # train, validation, train_labels, validation_labels = train_test_split(
     #         train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
-    train_dataset = SpectrogramDataset(train_paths, train_labels_enc, label_names_set = label_names_set,transform = transform, augment = True)
-    val_dataset = SpectrogramDataset(val_paths, val_labels_enc, label_names_set= label_names_set, transform = transform, augment = False)
+    train_dataset = SpectrogramDataset(train_paths, train_labels_enc, label_names_set = label_names_set,transform = transform, augment = True, state = "train")
+    val_dataset = SpectrogramDataset(val_paths, val_labels_enc, label_names_set= label_names_set, transform = transform, augment = False, state = "valid")
     # train_dataset = SpectrogramDataset(train_paths, train_labels_enc,transform = transform, augment = True)
     # val_dataset = SpectrogramDataset(val_paths, val_labels_enc, transform = transform, augment = False)
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
