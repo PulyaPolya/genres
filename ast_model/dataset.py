@@ -192,22 +192,26 @@ class ArtistSplit:
         df = pd.read_csv(self.dataset_csv)
         labels = list(df.genre.values)
         return labels
-    def create_splits(self):        # the main function here that does the job
+    def create_splits(self, val_splits = 0.2, test_splits = 0.1):        # the main function here that does the job
         df = pd.read_csv(self.dataset_csv)
         #Create splitter that stratifies on 'genre' and groups by 'artist'
-        sgkf = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
+        n_test_splits = int(1 / test_splits)
+        sgkf_test = StratifiedGroupKFold(n_splits=n_test_splits, shuffle=True, random_state=42)
 
         # Get the first split: trainval vs test -> 80 / 20 split
-        for trainval_idx, test_idx in sgkf.split(df, df['genre'], groups=df['artist']):   # sgkf makes sure that one artist can't end up in
+        for trainval_idx, test_idx in sgkf_test.split(df, df['genre'], groups=df['artist']):   # sgkf makes sure that one artist can't end up in
             df_trainval = df.iloc[trainval_idx]                                           # multiple splits
             df_test = df.iloc[test_idx]
             break       # only take the first fold
         # Get the second split: train vs val -> 80 / 20 split
-        for train_idx, val_idx in sgkf.split(df_trainval, df_trainval['genre'], groups=df_trainval['artist']):
+        n_val_splits = int(1 / val_splits)
+        sgkf_val = StratifiedGroupKFold(n_splits=n_val_splits, shuffle=True, random_state=42)  
+        for train_idx, val_idx in sgkf_val.split(df_trainval, df_trainval['genre'], groups=df_trainval['artist']):
             df_train = df_trainval.iloc[train_idx]
             df_val = df_trainval.iloc[val_idx]
             break       # only take the first fold
         # check that splits indeed don't intersect
+        
         artist_train =set(df_train["artist"])
         artist_val = set(df_val["artist"])
         artist_test = set(df_test["artist"])
@@ -219,4 +223,6 @@ class ArtistSplit:
             result.extend([df_split["filepath"].tolist(), df_split["genre"].tolist()])
         train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = result
         return train_paths, train_labels, val_paths, val_labels, test_paths, test_labels
+    
+    
         

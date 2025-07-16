@@ -25,6 +25,7 @@ class ASTForGenreClassification(PreTrainedModel):
         self.activation_fn = self.get_activation(config.activation_fn)
         self.freeze_layers = config.freeze_layers
         self.classifier = nn.Linear(768, config.num_labels)
+        self.normalisation = self.get_normalisation(config.normalisation, 768)
         if self.freeze_layers:
             print(f"freezing {self.freeze_layers} layers")
             for i, layer in enumerate(self.ast.encoder.layer):
@@ -43,7 +44,6 @@ class ASTForGenreClassification(PreTrainedModel):
         return acrivation_mapping.get(activation_fn)
     def get_normalisation(self, norm_type, dim) -> nn.Module:
         norm_mapping = {
-        "batch": lambda d: nn.BatchNorm1d(d),
         "layer": lambda d: nn.LayerNorm(d),
         "none": lambda d: nn.Identity(),
     }
@@ -51,6 +51,7 @@ class ASTForGenreClassification(PreTrainedModel):
     def forward(self, input_values, labels=None):
         x = self.ast.embeddings(input_values)
         x = self.ast.encoder(x).last_hidden_state
+        x = self.normalisation(x)
         x = x.mean(dim=1)
         x = self.dropout(x)
         x = self.activation_fn(x)

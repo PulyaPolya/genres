@@ -131,9 +131,10 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
                                 activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
+                                normalisation = trial.suggest_categorical("normalisation", [ "layer", "none"]),
                                 dropout_top = trial.suggest_float(f"dropout_top", 0.0, 0.4),
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers =trial.suggest_int("freeze_layers", 0, 8),
+                                freeze_layers =trial.suggest_int("freeze_layers", 0, 10),
                                 id2label=id2label,
                                 label2id=label2id,
                                 )
@@ -147,6 +148,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
             wandb.init(project="ast_model", name=name, group = group, config=
                         {
                             "activation_fn" : config.activation_fn,
+                            "normalisation": config.normalisation, 
                             "dropout" : config.dropout_top, 
                             "freeze_layers" :  config.freeze_layers,
                             "learning_rate" : config.learning_rate,
@@ -158,7 +160,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     model = ASTForGenreClassification(config=config)
     if trial:
         #print(f"hyperparameters chosen: num_layers = {num_layers_top}")
-        hyperparams = {key : getattr(config, key) for key in ["num_labels", "activation_fn", "dropout_top", "learning_rate", "learning_rate", "freeze_layers"]}
+        hyperparams = {key : getattr(config, key) for key in ["num_labels", "activation_fn", "dropout_top", "learning_rate", "learning_rate", "freeze_layers", "normalisation"]}
         hyperparams_df = pd.DataFrame.from_dict([hyperparams])
         print("Chosen hyperparameters")
         print(hyperparams_df)
