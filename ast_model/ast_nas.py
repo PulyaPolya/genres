@@ -109,7 +109,7 @@ class EarlyStoppingBelowThresholdCallback (TrainerCallback):      # quickly disc
             self.counter = 0
         return control
 
-def get_confusion_matrix(predictions, label_encoder):
+def get_confusion_matrix(predictions, label_encoder,name):
     y_pred = predictions.predictions.argmax(axis = 1)
     y_true = predictions.label_ids
     labels = list(label_encoder.classes_)
@@ -119,7 +119,7 @@ def get_confusion_matrix(predictions, label_encoder):
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=genre_names)
     disp.plot(ax=ax, xticks_rotation=90, cmap="Blues", colorbar=False)
     plt.title("Confusion Matrix")
-    plt.savefig("confusion_matrix.pdf", bbox_inches="tight")
+    plt.savefig(f"cm_{name}.pdf", bbox_inches="tight")
     plt.close()
     genre_names = list(label_encoder.classes_)
 
@@ -130,22 +130,24 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
         label2id = {label: i for i, label in enumerate(train_dataset.labels_names_set)}
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
-                                activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
-                                normalisation = trial.suggest_categorical("normalisation", [ "layer", "none"]),
-                                batch_size = trial.suggest_categorical("batch_size", [ 4, 8, 16, 32, 64]),
-                                dropout_top = trial.suggest_float(f"dropout_top", 0.0, 0.4),
-                                learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers =trial.suggest_int("freeze_layers", 0, 10),
+                                activation_fn =  "gelu", # trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
+                                normalisation = "none",# trial.suggest_categorical("normalisation", [ "layer", "none"]),
+                                batch_size =4, # trial.suggest_categorical("batch_size", [ 4, 8, 16, 32, 64]),
+                                dropout_top =0.23946, # trial.suggest_float(f"dropout_top", 0.0, 0.4),
+                                learning_rate =0.000020513, #  trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
+                                freeze_layers = 1,# trial.suggest_int("freeze_layers", 0, 10),
                                 id2label=id2label,
                                 label2id=label2id,
                                 )
-        if params.wandb_name:
-            if params.RUN_NAS:
+        if params.RUN_NAS:
                 name = f"trial_{trial.number}"
                 group= params.wandb_name
-            else:
+        else:
                 name = params.wandb_name
                 group = None
+        
+        if params.wandb_name:
+            
             wandb.init(project="ast_model", name=name, group = group, config=
                         {
                             "activation_fn" : config.activation_fn,
@@ -180,7 +182,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     load_best_model_at_end=True,
     metric_for_best_model="accuracy",
     fp16=gpu,
-    #gradient_accumulation_steps=8,
+    gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
     push_to_hub=False,
@@ -199,14 +201,14 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     tokenizer=None,
     data_collator=data_collator,
     compute_metrics=compute_metrics,
-    callbacks=[EarlyStoppingCallback(early_stopping_patience=8),
-               EarlyStoppingBelowThresholdCallback(threshold=0.3, patience=3)],
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=9),
+               EarlyStoppingBelowThresholdCallback(threshold=0.4, patience=3)],
 )
     trainer.train()
     eval_result = trainer.evaluate()
     # getting confusion matrix 
     predictions = trainer.predict(val_dataset)
-    #get_confusion_matrix(predictions, label_encoder)
+    get_confusion_matrix(predictions, label_encoder, name)
     if params.wandb_name:
         wandb.log({"eval_accuracy": eval_result["eval_accuracy"]
                     #"confusion_matrix": wandb.Image("confusion_matrix.pdf")
@@ -248,7 +250,7 @@ def main():
     label_names_set = set(labels)
     #encoded_labels = le.fit_transform(labels)
     # adding augmentation class applied to the training data
-    transform = Augment()
+    transform = Augment( augment_prob = 0.5)
     # train, test, train_labels, test_labels = train_test_split(
     #         tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
     # train, validation, train_labels, validation_labels = train_test_split(
@@ -265,7 +267,7 @@ def main():
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna.db",
+                                #storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, params = config, label_encoder = le), n_trials = config.num_trials)
     best_trial = study.best_trial
