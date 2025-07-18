@@ -206,12 +206,18 @@ class ArtistSplit:
         # Get the second split: train vs val -> 80 / 20 split
         n_val_splits = int(1 / val_splits)
         sgkf_val = StratifiedGroupKFold(n_splits=n_val_splits, shuffle=True, random_state=42)  
-        for train_idx, val_idx in sgkf_val.split(df_trainval, df_trainval['genre'], groups=df_trainval['artist']):
-            df_train = df_trainval.iloc[train_idx]
-            df_val = df_trainval.iloc[val_idx]
-            break       # only take the first fold
+        for i, (train_idx, val_idx) in enumerate(sgkf_val.split(df_trainval, df_trainval['genre'], groups=df_trainval['artist'])):
+            if i == 2:
+                df_train = df_trainval.iloc[train_idx]
+                df_val = df_trainval.iloc[val_idx]
+                break       # only take the first fold
         # check that splits indeed don't intersect
-        
+        genres = set(df["genre"].unique())  # split 2
+        val_genre_counts = {}
+        for genre in genres:
+            size = len(df_val[df_val["genre"] ==genre])
+            val_genre_counts[genre] = size
+        print(f"genre distributions for val split{val_genre_counts}")
         artist_train =set(df_train["artist"])
         artist_val = set(df_val["artist"])
         artist_test = set(df_test["artist"])

@@ -8,6 +8,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import numpy as np
 import torch
+from collections import Counter
 import evaluate
 import os
 from torchinfo import summary
@@ -235,28 +236,35 @@ def main():
     # # # if config.audio_path:   
     # # #     data, tracks_path, labels, num_labels  = get_audio(config.audio_path)
     # #      data, tracks_path, labels  = get_spectrograms(config.spectrogram_path)
-    split_artists = ArtistSplit(config.data_path, config.dataset_table)
-    labels = split_artists.get_labels()
+    # split_artists = ArtistSplit(config.data_path, config.dataset_table)
+    # labels = split_artists.get_labels()
+    # le = LabelEncoder()
+    # le.fit(labels)
+    # config.num_labels = len(le.classes_) 
+    # train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits()
+    # train_labels_enc = le.transform(train_labels)
+    # val_labels_enc = le.transform(val_labels)    
+    if config.data_path:   
+        data, tracks_path, labels, num_labels  = get_audio( config.data_path)
     le = LabelEncoder()
     le.fit(labels)
     config.num_labels = len(le.classes_) 
-    train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits()
-    train_labels_enc = le.transform(train_labels)
-    val_labels_enc = le.transform(val_labels)    
-    # if config.data_path:   
-    #     data, tracks_path, labels, num_labels  = get_audio( config.data_path)
     # elif config.spectrogram_path:
     #     data, tracks_path, labels  = get_spectrograms(config.spectrogram_path) 
     label_names_set = set(labels)
-    #encoded_labels = le.fit_transform(labels)
+    encoded_labels = le.fit_transform(labels)
     # adding augmentation class applied to the training data
     transform = Augment( augment_prob = 0.5)
-    # train, test, train_labels, test_labels = train_test_split(
-    #         tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
-    # train, validation, train_labels, validation_labels = train_test_split(
-    #         train, train_labels, test_size=0.2, stratify=train_labels, random_state=42)
+    train_paths, test_paths, train_labels_enc, test_labels_enc = train_test_split(
+            tracks_path, encoded_labels, test_size=0.1, stratify=encoded_labels, random_state=42)
+    train_paths, val_paths, train_labels_enc, validation_labels_enc = train_test_split(
+            train_paths, train_labels_enc, test_size=0.2, stratify=train_labels_enc, random_state=42)
+    # train_labels_enc = le.transform(train_labels)
+    # val_labels_enc = le.transform(validation_labels)     
+    # counts_validation = Counter(validation_labels_enc)
+    # print(counts_validation)
     train_dataset = SpectrogramDataset(train_paths, train_labels_enc, label_names_set = label_names_set,transform = transform, augment = True, state = "train")
-    val_dataset = SpectrogramDataset(val_paths, val_labels_enc, label_names_set= label_names_set, transform = transform, augment = False, state = "valid")
+    val_dataset = SpectrogramDataset(val_paths, validation_labels_enc, label_names_set= label_names_set, transform = transform, augment = False, state = "valid")
     # train_dataset = SpectrogramDataset(train_paths, train_labels_enc,transform = transform, augment = True)
     # val_dataset = SpectrogramDataset(val_paths, val_labels_enc, transform = transform, augment = False)
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
