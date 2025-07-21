@@ -17,47 +17,58 @@ import random
 from beat_this.preprocessing import LogMelSpect #load_audio
 
 class SpectrogramDataset(Dataset):
-    def __init__(self, path, labels, label_names_set, transform = None, augment = False, state= "train"):
+    def __init__(self, path, labels, label_names_set, transform = None, augment = False, state= "train", overlap = 20):
         self.paths = path
         self.labels = labels
         self.max_time = 1020  # in order to match the input dimension
         #self.data = data
         self.transform = transform
+        self.step  = self.max_time - overlap
         self.augment = augment
         self.state = state
         self.labels_names_set = label_names_set # storing the genre names 
+        self.num_crops  = 2
+        self.overlap    = overlap
         
     def __len__(self):
-        return len(self.paths)
+        return len(self.paths)*self.num_crops
 
     def __getitem__(self, idx):
         #spec = self.spectrograms[idx]  # shape: (128, time)
+        audio_idx = idx // self.num_crops
+        crop_idx  = idx % self.num_crops
+
         if self.transform:
-            spec =self.transform(self.paths[idx], self.augment)
+            spec =self.transform(self.paths[audio_idx], self.augment)
             if spec is  None:
                  return self.__getitem__((idx + 1) % len(self))
         else:
-            spec = self.data[self.paths[idx]]
+            spec = self.data[self.paths[audio_idx]]
         if spec.ndim == 3 and spec.shape[0] == 1:
             spec = spec.squeeze(0)
-        if spec.shape[0] > self.max_time:
-            if self.state == "train":
-                # randomly choose where to crop the fixed length during training 
-                start = np.random.randint(0, spec.shape[0] - self.max_time) 
-                
-            else:
-                # always take the center piece during validation and testing
-                start = (spec.shape[0] - self.max_time) // 2
-            spec = spec[start: start + self.max_time, :]
+        T = spec.shape[0]
+        if T < self.max_time:
+            pad = self.max_time - T
+            spec = np.pad(spec, ((0, pad), (0, 0)), mode="constant")
+        if self.state == "train":
+            # randomly choose where to crop the fixed length during training 
+            max_start = spec.shape[0] - self.max_time
+            desired   = crop_idx * self.step
+            start     = min(desired, max_start)
+            spec = spec[start : start + self.max_time]
+
+            
         else:
-            pad_len = self.max_time - spec.shape[0]
-            spec = np.pad(spec, ((0, pad_len), (0,0)), mode = 'constant')
+            # always take the center piece during validation and testing
+            start = (spec.shape[0] - self.max_time) // 2
+        #spec = spec[start: start + self.max_time, :]
+
         #spec = spec[:self.max_time, :]
         #spec = spec.float()
         spec = torch.tensor(spec, dtype=torch.float32)
 
         #spec = spec.unsqueeze(0)
-        label = self.labels[idx]
+        label = self.labels[audio_idx]
         return {"input_values": spec, "labels": int(label)}
     
 
