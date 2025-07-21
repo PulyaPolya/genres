@@ -17,47 +17,58 @@ import random
 from beat_this.preprocessing import LogMelSpect #load_audio
 
 class SpectrogramDataset(Dataset):
-    def __init__(self, path, labels, label_names_set, transform = None, augment = False, state= "train"):
+    def __init__(self, path, labels, label_names_set, transform = None, augment = False, state= "train", overlap = 20):
         self.paths = path
         self.labels = labels
         self.max_time = 1020  # in order to match the input dimension
         #self.data = data
         self.transform = transform
+        self.step  = self.max_time - overlap
         self.augment = augment
         self.state = state
         self.labels_names_set = label_names_set # storing the genre names 
+        self.num_crops  = 2
+        self.overlap    = overlap
         
     def __len__(self):
-        return len(self.paths)
+        return len(self.paths)*self.num_crops
 
     def __getitem__(self, idx):
         #spec = self.spectrograms[idx]  # shape: (128, time)
+        audio_idx = idx // self.num_crops
+        crop_idx  = idx % self.num_crops
+
         if self.transform:
-            spec =self.transform(self.paths[idx], self.augment)
+            spec =self.transform(self.paths[audio_idx], self.augment)
             if spec is  None:
                  return self.__getitem__((idx + 1) % len(self))
         else:
-            spec = self.data[self.paths[idx]]
+            spec = self.data[self.paths[audio_idx]]
         if spec.ndim == 3 and spec.shape[0] == 1:
             spec = spec.squeeze(0)
-        if spec.shape[0] > self.max_time:
-            if self.state == "train":
-                # randomly choose where to crop the fixed length during training 
-                start = np.random.randint(0, spec.shape[0] - self.max_time) 
-                
-            else:
-                # always take the center piece during validation and testing
-                start = (spec.shape[0] - self.max_time) // 2
-            spec = spec[start: start + self.max_time, :]
+        T = spec.shape[0]
+        if T < self.max_time:
+            pad = self.max_time - T
+            spec = np.pad(spec, ((0, pad), (0, 0)), mode="constant")
+        if self.state == "train":
+            # randomly choose where to crop the fixed length during training 
+            max_start = spec.shape[0] - self.max_time
+            desired   = crop_idx * self.step
+            start     = min(desired, max_start)
+            spec = spec[start : start + self.max_time]
+
+            
         else:
-            pad_len = self.max_time - spec.shape[0]
-            spec = np.pad(spec, ((0, pad_len), (0,0)), mode = 'constant')
+            # always take the center piece during validation and testing
+            start = (spec.shape[0] - self.max_time) // 2
+        #spec = spec[start: start + self.max_time, :]
+
         #spec = spec[:self.max_time, :]
         #spec = spec.float()
         spec = torch.tensor(spec, dtype=torch.float32)
 
         #spec = spec.unsqueeze(0)
-        label = self.labels[idx]
+        label = self.labels[audio_idx]
         return {"input_values": spec, "labels": int(label)}
     
 
@@ -192,22 +203,32 @@ class ArtistSplit:
         df = pd.read_csv(self.dataset_csv)
         labels = list(df.genre.values)
         return labels
-    def create_splits(self):        # the main function here that does the job
+    def create_splits(self, val_splits = 0.2, test_splits = 0.1):        # the main function here that does the job
         df = pd.read_csv(self.dataset_csv)
         #Create splitter that stratifies on 'genre' and groups by 'artist'
-        sgkf = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=42)
+        n_test_splits = int(1 / test_splits)
+        sgkf_test = StratifiedGroupKFold(n_splits=n_test_splits, shuffle=True, random_state=42)
 
         # Get the first split: trainval vs test -> 80 / 20 split
-        for trainval_idx, test_idx in sgkf.split(df, df['genre'], groups=df['artist']):   # sgkf makes sure that one artist can't end up in
+        for trainval_idx, test_idx in sgkf_test.split(df, df['genre'], groups=df['artist']):   # sgkf makes sure that one artist can't end up in
             df_trainval = df.iloc[trainval_idx]                                           # multiple splits
             df_test = df.iloc[test_idx]
             break       # only take the first fold
         # Get the second split: train vs val -> 80 / 20 split
-        for train_idx, val_idx in sgkf.split(df_trainval, df_trainval['genre'], groups=df_trainval['artist']):
-            df_train = df_trainval.iloc[train_idx]
-            df_val = df_trainval.iloc[val_idx]
-            break       # only take the first fold
+        n_val_splits = int(1 / val_splits)
+        sgkf_val = StratifiedGroupKFold(n_splits=n_val_splits, shuffle=True, random_state=42)  
+        for i, (train_idx, val_idx) in enumerate(sgkf_val.split(df_trainval, df_trainval['genre'], groups=df_trainval['artist'])):
+            if i == 2:
+                df_train = df_trainval.iloc[train_idx]
+                df_val = df_trainval.iloc[val_idx]
+                break       # only take the first fold
         # check that splits indeed don't intersect
+        genres = set(df["genre"].unique())  # split 2
+        val_genre_counts = {}
+        for genre in genres:
+            size = len(df_val[df_val["genre"] ==genre])
+            val_genre_counts[genre] = size
+        print(f"genre distributions for val split{val_genre_counts}")
         artist_train =set(df_train["artist"])
         artist_val = set(df_val["artist"])
         artist_test = set(df_test["artist"])
@@ -219,4 +240,6 @@ class ArtistSplit:
             result.extend([df_split["filepath"].tolist(), df_split["genre"].tolist()])
         train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = result
         return train_paths, train_labels, val_paths, val_labels, test_paths, test_labels
+    
+    
         
