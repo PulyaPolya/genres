@@ -14,6 +14,7 @@ from os import listdir
 from os.path import isfile, join
 import torchaudio
 import random
+from sklearn.model_selection import GroupShuffleSplit
 from beat_this.preprocessing import LogMelSpect #load_audio
 
 class SpectrogramDataset(Dataset):
@@ -31,11 +32,14 @@ class SpectrogramDataset(Dataset):
         self.overlap    = overlap
         
     def __len__(self):
-        return len(self.paths)*self.num_crops
+        if self.state == "train":
+            return len(self.paths)*self.num_crops
+        else:
+            return len(self.paths)
 
     def __getitem__(self, idx):
         #spec = self.spectrograms[idx]  # shape: (128, time)
-        audio_idx = idx // self.num_crops
+        audio_idx = idx // self.num_crops if self.state == "train" else idx
         crop_idx  = idx % self.num_crops
 
         if self.transform:
@@ -63,7 +67,7 @@ class SpectrogramDataset(Dataset):
             start = (spec.shape[0] - self.max_time) // 2
         #spec = spec[start: start + self.max_time, :]
 
-        #spec = spec[:self.max_time, :]
+        spec = spec[:self.max_time, :]
         #spec = spec.float()
         spec = torch.tensor(spec, dtype=torch.float32)
 
@@ -203,26 +207,76 @@ class ArtistSplit:
         df = pd.read_csv(self.dataset_csv)
         labels = list(df.genre.values)
         return labels
+    def balanced_group_split(self,df, test_size, val_size,
+                         group_col='artist',
+                         class_col='genre',
+                         tol=0.01,
+                         seed=42,
+                         max_tries=1000):
+        """
+        Returns train, val, test indices so that:
+        - no artist overlaps splits
+        - each split’s genre distribution is within tol of overall
+        """
+        rng = np.random.RandomState(seed)
+        gss   = GroupShuffleSplit(n_splits=max_tries,
+                                test_size=test_size,
+                                random_state=seed)
+
+        genres = df[class_col].value_counts(normalize=True)
+        for trainval_idx, test_idx in gss.split(df, groups=df[group_col]):
+            # check test balance
+            test_dist = df.iloc[test_idx][class_col].value_counts(normalize=True)
+            if np.max(np.abs(test_dist.reindex(genres.index, fill_value=0) - genres)) > tol:
+                continue
+
+            # now val split within trainval
+            gss_val = GroupShuffleSplit(n_splits=max_tries,
+                                        test_size=val_size/(1-test_size),
+                                        random_state=seed)
+                                                    # multiple splits
+            df_test = df.iloc[test_idx]
+            df_trainval = df.iloc[trainval_idx]
+            for train_idx, val_idx in gss_val.split(df_trainval, 
+                                                    groups=df_trainval[group_col]):
+                val_dist = df_trainval.iloc[val_idx][class_col] \
+                            .value_counts(normalize=True)
+                if np.max(np.abs(val_dist.reindex(genres.index, fill_value=0) - genres)) <= tol:
+                    # success!
+                    # map back to original indices
+                    train_idx = trainval_idx[np.array(train_idx)]
+                    val_idx   = trainval_idx[np.array(val_idx)]
+                    df_train = df.iloc[train_idx]
+                    df_val= df.iloc[val_idx]
+                    return df_train, df_val, df_test
+
+        raise RuntimeError("Could not find a balanced grouping within tol")
     def create_splits(self, val_splits = 0.2, test_splits = 0.1):        # the main function here that does the job
         df = pd.read_csv(self.dataset_csv)
         #Create splitter that stratifies on 'genre' and groups by 'artist'
-        n_test_splits = int(1 / test_splits)
-        sgkf_test = StratifiedGroupKFold(n_splits=n_test_splits, shuffle=True, random_state=42)
+        # n_test_splits = int(1 / test_splits)
+        # sgkf_test = StratifiedGroupKFold(n_splits=n_test_splits, shuffle=True, random_state=42)
 
-        # Get the first split: trainval vs test -> 80 / 20 split
-        for trainval_idx, test_idx in sgkf_test.split(df, df['genre'], groups=df['artist']):   # sgkf makes sure that one artist can't end up in
-            df_trainval = df.iloc[trainval_idx]                                           # multiple splits
-            df_test = df.iloc[test_idx]
-            break       # only take the first fold
-        # Get the second split: train vs val -> 80 / 20 split
-        n_val_splits = int(1 / val_splits)
-        sgkf_val = StratifiedGroupKFold(n_splits=n_val_splits, shuffle=True, random_state=42)  
-        for i, (train_idx, val_idx) in enumerate(sgkf_val.split(df_trainval, df_trainval['genre'], groups=df_trainval['artist'])):
-            if i == 2:
-                df_train = df_trainval.iloc[train_idx]
-                df_val = df_trainval.iloc[val_idx]
-                break       # only take the first fold
+        # # Get the first split: trainval vs test -> 80 / 20 split
+        # for trainval_idx, test_idx in sgkf_test.split(df, df['genre'], groups=df['artist']):   # sgkf makes sure that one artist can't end up in
+        #     df_trainval = df.iloc[trainval_idx]                                           # multiple splits
+        #     df_test = df.iloc[test_idx]
+        #     break       # only take the first fold
+        # # Get the second split: train vs val -> 80 / 20 split
+        # n_val_splits = int(1 / val_splits)
+        # sgkf_val = StratifiedGroupKFold(n_splits=n_val_splits, shuffle=True, random_state=42)  
+        # for i, (train_idx, val_idx) in enumerate(sgkf_val.split(df_trainval, df_trainval['genre'], groups=df_trainval['artist'])):
+        #     if i == 2:
+        #         df_train = df_trainval.iloc[train_idx]
+        #         df_val = df_trainval.iloc[val_idx]
+        #         break       # only take the first fold
         # check that splits indeed don't intersect
+        df_train, df_val, df_test = self.balanced_group_split(df, test_size= 0.1, val_size= 0.2,
+                         group_col='artist',
+                         class_col='genre',
+                         tol=0.018,
+                         seed=42,
+                         max_tries=10000)
         genres = set(df["genre"].unique())  # split 2
         val_genre_counts = {}
         for genre in genres:

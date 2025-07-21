@@ -244,15 +244,15 @@ def main():
     train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits()
     train_labels_enc = le.transform(train_labels)
     validation_labels_enc = le.transform(val_labels)    
-    if config.data_path:   
-        data, tracks_path, labels, num_labels  = get_audio( config.data_path)
+    # if config.data_path:   
+    #     data, tracks_path, labels, num_labels  = get_audio( config.data_path)
     le = LabelEncoder()
     le.fit(labels)
     config.num_labels = len(le.classes_) 
     # elif config.spectrogram_path:
     #     data, tracks_path, labels  = get_spectrograms(config.spectrogram_path) 
     label_names_set = set(labels)
-    encoded_labels = le.fit_transform(labels)
+    #encoded_labels = le.fit_transform(labels)
     # adding augmentation class applied to the training data
     transform = Augment( augment_prob = 0.5)
     # train_paths, test_paths, train_labels_enc, test_labels_enc = train_test_split(
