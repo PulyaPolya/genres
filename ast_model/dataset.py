@@ -22,7 +22,6 @@ class SpectrogramDataset(Dataset):
         self.paths = path
         self.labels = labels
         self.max_time = 1020  # in order to match the input dimension
-        #self.data = data
         self.transform = transform
         self.step  = self.max_time - overlap
         self.augment = augment
@@ -69,8 +68,11 @@ class SpectrogramDataset(Dataset):
 
         spec = spec[:self.max_time, :]
         #spec = spec.float()
-        spec = torch.tensor(spec, dtype=torch.float32)
-
+        #spec = torch.tensor(spec, dtype=torch.float32)
+        if isinstance(spec, np.ndarray):
+            spec = torch.from_numpy(spec).float()
+        else:
+            spec = spec.detach().clone().float()
         #spec = spec.unsqueeze(0)
         label = self.labels[audio_idx]
         return {"input_values": spec, "labels": int(label)}
@@ -80,7 +82,6 @@ class Augment:
     def __init__(self, out_sr = 22050, aug_sr = 44100, mel_params = None, augm_params = None, augment_prob = 0.3):
         self.out_sr= out_sr
         self.aug_sr=aug_sr            
-        #self.max_len = 30
         self.augment_prob = augment_prob
         default_mel_params = dict(
                         n_fft=1024,
@@ -251,33 +252,16 @@ class ArtistSplit:
                     return df_train, df_val, df_test
 
         raise RuntimeError("Could not find a balanced grouping within tol")
-    def create_splits(self, val_splits = 0.2, test_splits = 0.1):        # the main function here that does the job
+    def create_splits(self, val_size = 0.2, test_size = 0.1):        # the main function here that does the job
         df = pd.read_csv(self.dataset_csv)
-        #Create splitter that stratifies on 'genre' and groups by 'artist'
-        # n_test_splits = int(1 / test_splits)
-        # sgkf_test = StratifiedGroupKFold(n_splits=n_test_splits, shuffle=True, random_state=42)
-
-        # # Get the first split: trainval vs test -> 80 / 20 split
-        # for trainval_idx, test_idx in sgkf_test.split(df, df['genre'], groups=df['artist']):   # sgkf makes sure that one artist can't end up in
-        #     df_trainval = df.iloc[trainval_idx]                                           # multiple splits
-        #     df_test = df.iloc[test_idx]
-        #     break       # only take the first fold
-        # # Get the second split: train vs val -> 80 / 20 split
-        # n_val_splits = int(1 / val_splits)
-        # sgkf_val = StratifiedGroupKFold(n_splits=n_val_splits, shuffle=True, random_state=42)  
-        # for i, (train_idx, val_idx) in enumerate(sgkf_val.split(df_trainval, df_trainval['genre'], groups=df_trainval['artist'])):
-        #     if i == 2:
-        #         df_train = df_trainval.iloc[train_idx]
-        #         df_val = df_trainval.iloc[val_idx]
-        #         break       # only take the first fold
-        # check that splits indeed don't intersect
-        df_train, df_val, df_test = self.balanced_group_split(df, test_size= 0.1, val_size= 0.2,
+        #getting splits with non-intersecting artists balanced as possible
+        df_train, df_val, df_test = self.balanced_group_split(df, test_size, val_size,
                          group_col='artist',
                          class_col='genre',
                          tol=0.018,
                          seed=42,
                          max_tries=10000)
-        genres = set(df["genre"].unique())  # split 2
+        genres = set(df["genre"].unique()) 
         val_genre_counts = {}
         for genre in genres:
             size = len(df_val[df_val["genre"] ==genre])
