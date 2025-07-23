@@ -129,14 +129,16 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     if trial is not None:
         id2label = {i: label for i, label in enumerate(train_dataset.labels_names_set)}
         label2id = {label: i for i, label in enumerate(train_dataset.labels_names_set)}
+       
+
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
-                                activation_fn =  "gelu", # trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
-                                normalisation = "none",# trial.suggest_categorical("normalisation", [ "layer", "none"]),
-                                batch_size =4, # trial.suggest_categorical("batch_size", [ 4, 8, 16, 32, 64]),
-                                dropout_top =0.23946, # trial.suggest_float(f"dropout_top", 0.0, 0.4),
-                                learning_rate =0.000020513, #  trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers = 1,# trial.suggest_int("freeze_layers", 0, 10),
+                                activation_fn =  trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
+                                normalisation = trial.suggest_categorical("normalisation", [ "layer", "none"]),
+                                batch_size =params.batch_size, 
+                                dropout_top =trial.suggest_float(f"dropout_top", 0.0, 0.4),
+                                learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
+                                freeze_layers = trial.suggest_int("freeze_layers", 0, 8),
                                 id2label=id2label,
                                 label2id=label2id,
                                 )
@@ -187,9 +189,9 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     greater_is_better=True,
     report_to = ["wandb"],
     push_to_hub=False,
-    hub_model_id=params.hf_model_id,
+    #hub_model_id=params.hf_model_id,
     #hub_strategy="end",  
-    hub_strategy="checkpoint",
+    #hub_strategy="checkpoint",
     save_total_limit=1,
     seed = 42,
     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
@@ -202,7 +204,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     tokenizer=None,
     data_collator=data_collator,
     compute_metrics=compute_metrics,
-    callbacks=[EarlyStoppingCallback(early_stopping_patience=9),
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=7),
                EarlyStoppingBelowThresholdCallback(threshold=0.4, patience=3)],
 )
     trainer.train()
@@ -218,7 +220,9 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     torch.cuda.empty_cache()
     gc.collect()
     wandb.finish()
+
     return eval_result["eval_accuracy"]
+    
 
 
 def compute_metrics(eval_pred):
@@ -256,7 +260,7 @@ def main():
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                #storage = "sqlite:///optuna.db",
+                                storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, params = config, label_encoder = le), n_trials = config.num_trials)
     best_trial = study.best_trial
