@@ -138,7 +138,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
                                 batch_size =params.batch_size, 
                                 dropout_top =trial.suggest_float(f"dropout_top", 0.0, 0.4),
                                 learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers = trial.suggest_int("freeze_layers", 0, 8),
+                                freeze_layers = trial.suggest_int("freeze_layers", 0, 11),
                                 id2label=id2label,
                                 label2id=label2id,
                                 )
