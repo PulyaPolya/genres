@@ -125,7 +125,7 @@ def get_confusion_matrix(predictions, label_encoder,name):
     genre_names = list(label_encoder.classes_)
 
 
-def objective(trial, train_dataset, val_dataset, params, label_encoder):
+def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_encoder):
     if trial is not None:
         id2label = {i: label for i, label in enumerate(train_dataset.labels_names_set)}
         label2id = {label: i for i, label in enumerate(train_dataset.labels_names_set)}
@@ -208,12 +208,17 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
                EarlyStoppingBelowThresholdCallback(threshold=0.4, patience=3)],
 )
     trainer.train()
+    print("evaluating val")
     eval_result = trainer.evaluate()
+    print("evaluating test")
+    test_result = trainer.evaluate(eval_dataset=test_dataset)
+    print(test_result)
     # getting confusion matrix 
     predictions = trainer.predict(val_dataset)
     get_confusion_matrix(predictions, label_encoder, name)
     if params.wandb_name:
-        wandb.log({"eval_accuracy": eval_result["eval_accuracy"]
+        wandb.log({"eval_accuracy": eval_result["eval_accuracy"],
+                   "test_accuracy": test_result["eval_accuracy"]
                     #"confusion_matrix": wandb.Image("confusion_matrix.pdf")
                     })
     del model, trainer
@@ -243,7 +248,8 @@ def main():
     config.num_labels = len(le.classes_) 
     train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits()
     train_labels_enc = le.transform(train_labels)
-    validation_labels_enc = le.transform(val_labels)    
+    validation_labels_enc = le.transform(val_labels) 
+    test_labels_enc = le.transform(test_labels)   
     le = LabelEncoder()
     le.fit(labels)
     config.num_labels = len(le.classes_) 
@@ -252,6 +258,7 @@ def main():
     transform = Augment( augment_prob = 0.5)
     train_dataset = SpectrogramDataset(train_paths, train_labels_enc, label_names_set = label_names_set,transform = transform, augment = True, state = "train")
     val_dataset = SpectrogramDataset(val_paths, validation_labels_enc, label_names_set= label_names_set, transform = transform, augment = False, state = "valid")
+    test_dataset = SpectrogramDataset(test_paths, test_labels_enc, label_names_set= label_names_set, transform = transform, augment = False, state = "test")
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
     sampler = optuna.samplers.TPESampler(seed=42, 
                                          multivariate=True,
@@ -260,9 +267,10 @@ def main():
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna.db",
+                                #storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
-    study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, params = config, label_encoder = le), n_trials = config.num_trials)
+    study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, test_dataset = test_dataset,
+                                            params = config, label_encoder = le), n_trials = config.num_trials)
     best_trial = study.best_trial
     print("Best hyperparameters:", study.best_params)
     df = pd.DataFrame(study.best_params, index = ['i',])
