@@ -8,6 +8,7 @@ class ASTGenreConfig(ASTConfig):
     model_type= "ast-genre_classification"
     def __init__(self, **kwargs):   # **kwargs: arbitrary number of key words arguments
         super().__init__(**kwargs)
+        
         self.num_labels =kwargs.get("num_labels", 10)
         self.dropouts = kwargs.get("dropouts", 0.2)
         self.learning_rate = kwargs.get("learning_rate",3e-5 )
@@ -20,7 +21,7 @@ class ASTForGenreClassification(PreTrainedModel):
 
     def __init__(self, config, ast_model=ast_base):
         super().__init__(config)
-        self.ast = ast_model
+        self.ast = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593", cache_dir="./hf_cache")
         self.dropout = nn.Dropout(config.dropout_top)
         self.activation_fn = self.get_activation(config.activation_fn)
         self.freeze_layers = config.freeze_layers

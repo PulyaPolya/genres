@@ -30,7 +30,7 @@ logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLeve
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
 #os.environ["WANDB_MODE"] = "offline"
 gpu = torch.cuda.is_available()
-
+best_eval_acc = 0.61
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
@@ -190,7 +190,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
-    push_to_hub=True,
+    push_to_hub=False,
     hub_model_id=params.hf_model_id,
     hub_strategy="end",  
     #hub_strategy="checkpoint", # pushes all models regardless of eval acc
@@ -206,20 +206,27 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     tokenizer=None,
     data_collator=data_collator,
     compute_metrics=compute_metrics,
-    callbacks=[EarlyStoppingCallback(early_stopping_patience=7),
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=8),
                EarlyStoppingBelowThresholdCallback(threshold=0.4, patience=3)],
 )
+    print(f"trial{trial.number} before")
+    print("Model hash before training:", hash(tuple(p.data_ptr() for p in model.parameters())))
+
     trainer.train()
     print("evaluating val")
     eval_result = trainer.evaluate()
+    eval_accuracy = eval_result["eval_accuracy"]
     print("evaluating test")
     test_result = trainer.evaluate(eval_dataset=test_dataset)
     print(test_result)
-    trainer.save_model()       # writes best weights to ./ast-gtzan_cluster
-    trainer.push_to_hub(       # pushes that directory
-        commit_message="Upload best model at end of HPO",
-        blocking=True         # wait until upload finishes
-    )
+    # global best_eval_acc
+    # if eval_accuracy > best_eval_acc:
+    #     best_eval_acc = eval_accuracy
+    #     trainer.save_model()       # writes best weights to ./ast-gtzan_cluster
+    #     trainer.push_to_hub(       # pushes that directory
+    #         commit_message="Upload best model at end of HPO",
+    #         blocking=True         # wait until upload finishes
+    #     )
     # getting confusion matrix 
     predictions = trainer.predict(val_dataset)
     get_confusion_matrix(predictions, label_encoder, name)
@@ -234,7 +241,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     gc.collect()
     wandb.finish()
 
-    return eval_result["eval_accuracy"]
+    return eval_accuracy
     
 
 
