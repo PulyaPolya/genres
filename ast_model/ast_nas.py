@@ -130,7 +130,8 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
         id2label = {i: label for i, label in enumerate(train_dataset.labels_names_set)}
         label2id = {label: i for i, label in enumerate(train_dataset.labels_names_set)}
        
-
+        seed = trial.suggest_int("seed", 0, 2**31-1)
+        set_seed(seed)
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
                                 activation_fn =  "relu", #trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
@@ -173,7 +174,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
         print(hyperparams_df)
         summary(model)
     training_args = TrainingArguments(
-    output_dir="./ast-gtzan_cluster",
+    output_dir="./ast-merge",
     evaluation_strategy="epoch",
     save_strategy="epoch",
     logging_strategy="epoch",
@@ -188,10 +189,10 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
-    push_to_hub=False,
-    #hub_model_id=params.hf_model_id,
-    #hub_strategy="end",  
-    #hub_strategy="checkpoint",
+    push_to_hub=True,
+    hub_model_id=params.hf_model_id,
+    hub_strategy="end",  
+    #hub_strategy="checkpoint", # pushes all models regardless of eval acc
     save_total_limit=1,
     seed = 42,
     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
@@ -213,12 +214,18 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     print("evaluating test")
     test_result = trainer.evaluate(eval_dataset=test_dataset)
     print(test_result)
+    trainer.save_model()       # writes best weights to ./ast-gtzan_cluster
+    trainer.push_to_hub(       # pushes that directory
+        commit_message="Upload best model at end of HPO",
+        blocking=True         # wait until upload finishes
+    )
     # getting confusion matrix 
     predictions = trainer.predict(val_dataset)
     get_confusion_matrix(predictions, label_encoder, name)
     if params.wandb_name:
         wandb.log({"eval_accuracy": eval_result["eval_accuracy"],
-                   "test_accuracy": test_result["eval_accuracy"]
+                   "test_accuracy": test_result["eval_accuracy"],
+                   "seed":seed
                     #"confusion_matrix": wandb.Image("confusion_matrix.pdf")
                     })
     del model, trainer
@@ -240,7 +247,9 @@ def main():
     with open ("ast_training_params.json") as f:
         #config = json.load(f, object_hook=lambda d: SimpleNamespace(**d))
         config_dict = json.load(f) 
+    set_seed()
     config = Config(**config_dict)
+    os.environ["HF_TOKEN"] = config.hf_token
     split_artists = ArtistSplit(config.data_path, config.dataset_table)
     labels = split_artists.get_labels()
     le = LabelEncoder()
@@ -271,7 +280,6 @@ def main():
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, test_dataset = test_dataset,
                                             params = config, label_encoder = le), n_trials = config.num_trials)
-    best_trial = study.best_trial
     print("Best hyperparameters:", study.best_params)
     df = pd.DataFrame(study.best_params, index = ['i',])
     df.to_csv("best_hyp.csv")
