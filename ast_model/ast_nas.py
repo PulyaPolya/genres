@@ -247,7 +247,6 @@ def main():
     with open ("ast_training_params.json") as f:
         #config = json.load(f, object_hook=lambda d: SimpleNamespace(**d))
         config_dict = json.load(f) 
-    set_seed()
     config = Config(**config_dict)
     os.environ["HF_TOKEN"] = config.hf_token
     split_artists = ArtistSplit(config.data_path, config.dataset_table)
