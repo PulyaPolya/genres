@@ -133,12 +133,12 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
 
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
-                                activation_fn =  trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
-                                normalisation = trial.suggest_categorical("normalisation", [ "layer", "none"]),
+                                activation_fn =  "relu", #trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
+                                normalisation ="layer", #  trial.suggest_categorical("normalisation", [ "layer", "none"]),
                                 batch_size =params.batch_size, 
-                                dropout_top =trial.suggest_float(f"dropout_top", 0.0, 0.4),
-                                learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers = trial.suggest_int("freeze_layers", 0, 11),
+                                dropout_top =0.004396, #trial.suggest_float(f"dropout_top", 0.0, 0.4),
+                                learning_rate = 0.000011,#trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
+                                freeze_layers = 5,#trial.suggest_int("freeze_layers", 0, 11),
                                 id2label=id2label,
                                 label2id=label2id,
                                 )
