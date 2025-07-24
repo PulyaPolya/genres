@@ -130,8 +130,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
         id2label = {i: label for i, label in enumerate(train_dataset.labels_names_set)}
         label2id = {label: i for i, label in enumerate(train_dataset.labels_names_set)}
        
-        seed = trial.suggest_int("seed", 0, 2**31-1)
-        set_seed(seed)
+        
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
                                 activation_fn =  "relu", #trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
@@ -146,10 +145,12 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
         if params.RUN_NAS:
                 name = f"trial_{trial.number}"
                 group= params.wandb_name
+                seed = 42
         else:
                 name = params.wandb_name
                 group = None
-        
+                seed = random.randint(0, 2**31-1)
+        set_seed(seed)
         if params.wandb_name:
             
             wandb.init(project="ast_model", name=name, group = group, config=
