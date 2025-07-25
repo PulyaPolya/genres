@@ -133,12 +133,12 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
         
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
-                                activation_fn =  "relu", #trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
-                                normalisation ="layer", #  trial.suggest_categorical("normalisation", [ "layer", "none"]),
+                                activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
+                                normalisation =  trial.suggest_categorical("normalisation", [ "layer", "none"]),
                                 batch_size =params.batch_size, 
-                                dropout_top =0.004396, #trial.suggest_float(f"dropout_top", 0.0, 0.4),
-                                learning_rate = 0.000011,#trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers = 5,#trial.suggest_int("freeze_layers", 0, 11),
+                                dropout_top =trial.suggest_float(f"dropout_top", 0.0, 0.4),
+                                learning_rate =trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
+                                freeze_layers =trial.suggest_int("freeze_layers", 0, 8),
                                 id2label=id2label,
                                 label2id=label2id,
                                 )
@@ -191,8 +191,8 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     greater_is_better=True,
     report_to = ["wandb"],
     push_to_hub=False,
-    hub_model_id=params.hf_model_id,
-    hub_strategy="end",  
+    #hub_model_id=params.hf_model_id,
+    #hub_strategy="end",  
     #hub_strategy="checkpoint", # pushes all models regardless of eval acc
     save_total_limit=1,
     seed = 42,
@@ -207,7 +207,8 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     data_collator=data_collator,
     compute_metrics=compute_metrics,
     callbacks=[EarlyStoppingCallback(early_stopping_patience=8),
-               EarlyStoppingBelowThresholdCallback(threshold=0.4, patience=3)],
+         #      EarlyStoppingBelowThresholdCallback(threshold=0.3, patience=3)
+         ],
 )
     print(f"trial{trial.number} before")
     print("Model hash before training:", hash(tuple(p.data_ptr() for p in model.parameters())))
@@ -216,9 +217,9 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     print("evaluating val")
     eval_result = trainer.evaluate()
     eval_accuracy = eval_result["eval_accuracy"]
-    print("evaluating test")
-    test_result = trainer.evaluate(eval_dataset=test_dataset)
-    print(test_result)
+    # print("evaluating test")
+    # test_result = trainer.evaluate(eval_dataset=test_dataset)
+    # print(test_result)
     # global best_eval_acc
     # if eval_accuracy > best_eval_acc:
     #     best_eval_acc = eval_accuracy
@@ -232,7 +233,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     get_confusion_matrix(predictions, label_encoder, name)
     if params.wandb_name:
         wandb.log({"eval_accuracy": eval_result["eval_accuracy"],
-                   "test_accuracy": test_result["eval_accuracy"],
+                  # "test_accuracy": test_result["eval_accuracy"],
                    "seed":seed
                     #"confusion_matrix": wandb.Image("confusion_matrix.pdf")
                     })
@@ -256,7 +257,7 @@ def main():
         #config = json.load(f, object_hook=lambda d: SimpleNamespace(**d))
         config_dict = json.load(f) 
     config = Config(**config_dict)
-    os.environ["HF_TOKEN"] = config.hf_token
+    #os.environ["HF_TOKEN"] = config.hf_token
     split_artists = ArtistSplit(config.data_path, config.dataset_table)
     labels = split_artists.get_labels()
     le = LabelEncoder()
@@ -283,7 +284,7 @@ def main():
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                #storage = "sqlite:///optuna.db",
+                                storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, test_dataset = test_dataset,
                                             params = config, label_encoder = le), n_trials = config.num_trials)
