@@ -96,7 +96,7 @@ class Augment:
         default_augm_params = dict(
                 time_stretch= (20,4),
                 pitch_shift = (-5,6),
-                noise = 5
+                noise = 3
             )
         self.mel_params = mel_params if mel_params is not None else default_mel_params
         self.augm_params = augm_params if augm_params is not None else default_augm_params
