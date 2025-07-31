@@ -4,8 +4,7 @@ import torch.nn.functional as F
 from transformers.modeling_outputs import SequenceClassifierOutput
 
 ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593",
-                                     cache_dir="./hf_cache",
-    force_download=True)
+                                     )
 class ASTGenreConfig(ASTConfig):
     model_type= "ast-genre_classification"
     def __init__(self, **kwargs):   # **kwargs: arbitrary number of key words arguments
