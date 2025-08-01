@@ -54,6 +54,7 @@ class Config:
     num_trials : int = 1                # num optuna trials
     num_epochs : int = 10
     batch_size : int = 2
+    seed : int = 42
     hf_token : str | None = None
     hf_model_id : str | None = None
 
@@ -145,12 +146,11 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
         if params.RUN_NAS:
                 name = f"trial_{trial.number}"
                 group= params.wandb_name
-                seed = 42
         else:
                 name = params.wandb_name
                 group = None
-                seed = random.randint(0, 2**31-1)
-        set_seed(seed)
+                #seed = random.randint(0, 2**31-1)
+        #set_seed(seed)
         if params.wandb_name:
             
             wandb.init(project="ast_model", name=name, group = group, config=
@@ -195,7 +195,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     #hub_strategy="end",  
     #hub_strategy="checkpoint", # pushes all models regardless of eval acc
     save_total_limit=1,
-    seed = 42,
+    seed = params.seed,
     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
 )    
     trainer = Trainer(
@@ -234,7 +234,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     if params.wandb_name:
         wandb.log({"eval_accuracy": eval_result["eval_accuracy"],
                   # "test_accuracy": test_result["eval_accuracy"],
-                   "seed":seed
+                   "seed":params.seed
                     #"confusion_matrix": wandb.Image("confusion_matrix.pdf")
                     })
     del model, trainer
@@ -257,13 +257,19 @@ def main():
         #config = json.load(f, object_hook=lambda d: SimpleNamespace(**d))
         config_dict = json.load(f) 
     config = Config(**config_dict)
+    if config.RUN_NAS:
+        seed = 42
+    else:
+        seed = random.randint(0, 2**31-1)
+    set_seed(seed)
+    config.seed = seed
     #os.environ["HF_TOKEN"] = config.hf_token
     split_artists = ArtistSplit(config.data_path, config.dataset_table)
     labels = split_artists.get_labels()
     le = LabelEncoder()
     le.fit(labels)
     config.num_labels = len(le.classes_) 
-    train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits()
+    train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits(seed = seed)
     train_labels_enc = le.transform(train_labels)
     validation_labels_enc = le.transform(val_labels) 
     test_labels_enc = le.transform(test_labels)   
@@ -277,7 +283,7 @@ def main():
     val_dataset = SpectrogramDataset(val_paths, validation_labels_enc, label_names_set= label_names_set, transform = transform, augment = False, state = "valid")
     test_dataset = SpectrogramDataset(test_paths, test_labels_enc, label_names_set= label_names_set, transform = transform, augment = False, state = "test")
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
-    sampler = optuna.samplers.TPESampler(seed=42, 
+    sampler = optuna.samplers.TPESampler(seed=seed, 
                                          multivariate=True,
                                          warn_independent_sampling=False)
     study = optuna.create_study(study_name=config.optuna_name,

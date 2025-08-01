@@ -252,15 +252,14 @@ class ArtistSplit:
                     return df_train, df_val, df_test
 
         raise RuntimeError("Could not find a balanced grouping within tol")
-    def create_splits(self, val_size = 0.2, test_size = 0.1):        # the main function here that does the job
+    def create_splits(self, val_size = 0.2, test_size = 0.1, seed = 42):        # the main function here that does the job
         df = pd.read_csv(self.dataset_csv)
         #getting splits with non-intersecting artists balanced as possible
-        df_train, df_val, df_test = self.balanced_group_split(df, test_size, val_size,
+        df_train, df_val, df_test = self.balanced_group_split(df = df, test_size = test_size, val_size = val_size, seed = seed,
                          group_col='artist',
                          class_col='genre',
                          tol=0.018,
-                         seed=42,
-                         max_tries=10000)
+                        max_tries=10000)
         genres = set(df["genre"].unique()) 
         val_genre_counts = {}
         for genre in genres:
