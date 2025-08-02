@@ -126,7 +126,7 @@ def get_confusion_matrix(predictions, label_encoder,name):
     genre_names = list(label_encoder.classes_)
 
 
-def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_encoder):
+def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_encoder, seed):
     if trial is not None:
         id2label = {i: label for i, label in enumerate(train_dataset.labels_names_set)}
         label2id = {label: i for i, label in enumerate(train_dataset.labels_names_set)}
@@ -134,12 +134,12 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
         
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
-                                activation_fn = "none", #trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
-                                normalisation =  "none", # trial.suggest_categorical("normalisation", [ "layer", "none"]),
+                                activation_fn ="gelu", #trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
+                                normalisation =  "none", #trial.suggest_categorical("normalisation", [ "layer", "none"]),
                                 batch_size =params.batch_size, 
-                                dropout_top = 0.3774326454800553,  #trial.suggest_float(f"dropout_top", 0.0, 0.4),
-                                learning_rate =0.00039480511382346874, #trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers =4 ,#trial.suggest_int("freeze_layers", 0, 8),
+                                dropout_top = 0.055797544260816734, # trial.suggest_float(f"dropout_top", 0.0, 0.4),
+                                learning_rate = 0.000038396292998041685, #trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
+                                freeze_layers = 3, # trial.suggest_int("freeze_layers", 0, 8),
                                 id2label=id2label,
                                 label2id=label2id,
                                 )
@@ -150,7 +150,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
                 name = params.wandb_name
                 group = None
                 #seed = random.randint(0, 2**31-1)
-        #set_seed(seed)
+        set_seed(seed)
         if params.wandb_name:
             
             wandb.init(project="ast_model", name=name, group = group, config=
@@ -190,9 +190,9 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
-    push_to_hub=True,
-    hub_model_id=params.hf_model_id,
-    hub_strategy="end",  
+    # push_to_hub=True,
+    # hub_model_id=params.hf_model_id,
+    # hub_strategy="end",  
     #hub_strategy="checkpoint", # pushes all models regardless of eval acc
     save_total_limit=1,
     seed = params.seed,
@@ -218,23 +218,23 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     eval_result = trainer.evaluate()
     eval_accuracy = eval_result["eval_accuracy"]
     print("evaluating test")
-    test_result = trainer.evaluate(eval_dataset=test_dataset)
-    print(test_result)
-    global best_eval_acc
-    if eval_accuracy > best_eval_acc:
-        print(f"pushing to hub")
-        best_eval_acc = eval_accuracy
-        trainer.save_model()       # writes best weights to ./ast-gtzan_cluster
-        trainer.push_to_hub(       # pushes that directory
-            commit_message=f"Upload best model at end of HPO seed {params.seed}",
-            blocking=True         # wait until upload finishes
-        )
+    # test_result = trainer.evaluate(eval_dataset=test_dataset)
+    # print(test_result)
+    # global best_eval_acc
+    # if eval_accuracy > best_eval_acc:
+    #     print(f"pushing to hub")
+    #     best_eval_acc = eval_accuracy
+    #     trainer.save_model()       # writes best weights to ./ast-gtzan_cluster
+    #     trainer.push_to_hub(       # pushes that directory
+    #         commit_message=f"Upload best model at end of HPO seed {params.seed}",
+    #         blocking=True         # wait until upload finishes
+    #     )
     #getting confusion matrix 
     predictions = trainer.predict(val_dataset)
     get_confusion_matrix(predictions, label_encoder, name)
     if params.wandb_name:
         wandb.log({"eval_accuracy": eval_result["eval_accuracy"],
-                  "test_accuracy": test_result["eval_accuracy"],
+                 #"test_accuracy": test_result["eval_accuracy"],
                    "seed":params.seed
                     #"confusion_matrix": wandb.Image("confusion_matrix.pdf")
                     })
@@ -295,7 +295,7 @@ def main():
                                 #storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, test_dataset = test_dataset,
-                                            params = config, label_encoder = le), n_trials = config.num_trials)
+                                            params = config, label_encoder = le, seed = seed), n_trials = config.num_trials)
     print("Best hyperparameters:", study.best_params)
     df = pd.DataFrame(study.best_params, index = ['i',])
     df.to_csv("best_hyp.csv")
