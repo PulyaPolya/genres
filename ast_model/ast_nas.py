@@ -24,7 +24,7 @@ import logging
 import json
 from dataclasses import dataclass
 from transformers import AutoModelForSequenceClassification
-from dataset import Augment, SpectrogramDataset, ArtistSplit
+from dataset import Augment, SpectrogramDataset, ArtistSplit, load_audio_data
 from model import ASTGenreConfig, ASTForGenreClassification
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
@@ -279,11 +279,17 @@ def main():
     le.fit(labels)
     config.num_labels = len(le.classes_) 
     label_names_set = set(labels)
+    train_wav_data = load_audio_data(train_paths)
+    validation_wav_data = load_audio_data(val_paths)
+    test_wav_data = load_audio_data(test_paths)
     # adding augmentation class applied to the training data
-    transform = Augment( augment_prob = 0.5)
-    train_dataset = SpectrogramDataset(train_paths, train_labels_enc, label_names_set = label_names_set,transform = transform, augment = True, state = "train")
-    val_dataset = SpectrogramDataset(val_paths, validation_labels_enc, label_names_set= label_names_set, transform = transform, augment = False, state = "valid")
-    test_dataset = SpectrogramDataset(test_paths, test_labels_enc, label_names_set= label_names_set, transform = transform, augment = False, state = "test")
+    transform = Augment( augment_prob = 0.5, preload = True)
+    train_dataset = SpectrogramDataset(train_paths, train_labels_enc, label_names_set = label_names_set,
+                                       transform = transform, augment = True, preload = True,  state = "train", wav_data=train_wav_data)
+    val_dataset = SpectrogramDataset(val_paths, validation_labels_enc, label_names_set= label_names_set,
+                                      transform = transform, augment = False, preload = True,  state = "valid", wav_data = validation_wav_data)
+    test_dataset = SpectrogramDataset(test_paths, test_labels_enc, label_names_set= label_names_set,
+                                       transform = transform, augment = False, preload = True, state = "test", wav_data = test_wav_data)
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
     sampler = optuna.samplers.TPESampler(seed=seed, 
                                          multivariate=True,
