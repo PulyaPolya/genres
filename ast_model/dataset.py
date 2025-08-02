@@ -259,7 +259,7 @@ class ArtistSplit:
                          group_col='artist',
                          class_col='genre',
                          tol=0.018,
-                        max_tries=10000)
+                        max_tries=100000)
         genres = set(df["genre"].unique()) 
         val_genre_counts = {}
         for genre in genres:
