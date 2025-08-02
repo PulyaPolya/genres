@@ -134,12 +134,12 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
         
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
-                                activation_fn ="gelu", #trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
-                                normalisation =  "none", #trial.suggest_categorical("normalisation", [ "layer", "none"]),
+                                activation_fn =trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
+                                normalisation = trial.suggest_categorical("normalisation", [ "layer", "none"]),
                                 batch_size =params.batch_size, 
-                                dropout_top = 0.055797544260816734, # trial.suggest_float(f"dropout_top", 0.0, 0.4),
-                                learning_rate = 0.000038396292998041685, #trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers = 3, # trial.suggest_int("freeze_layers", 0, 8),
+                                dropout_top =  trial.suggest_float(f"dropout_top", 0.0, 0.4),
+                                learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
+                                freeze_layers =trial.suggest_int("freeze_layers", 0, 8),
                                 id2label=id2label,
                                 label2id=label2id,
                                 )
@@ -190,9 +190,9 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
-    # push_to_hub=True,
-    # hub_model_id=params.hf_model_id,
-    # hub_strategy="end",  
+    push_to_hub=True,
+    hub_model_id=params.hf_model_id,
+    hub_strategy="end",  
     #hub_strategy="checkpoint", # pushes all models regardless of eval acc
     save_total_limit=1,
     seed = params.seed,
@@ -298,7 +298,7 @@ def main():
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                #storage = "sqlite:///optuna.db",
+                                storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, test_dataset = test_dataset,
                                             params = config, label_encoder = le, seed = seed), n_trials = config.num_trials)
@@ -307,6 +307,7 @@ def main():
     df.to_csv("best_hyp.csv")
     
 if __name__ == "__main__":
-    # model =   ASTForGenreClassification.from_pretrained("./ast-gtzan_cluster/checkpoint-1575")
-    # model.push_to_hub("PolinaKozarovytska/ast")
+    # os.environ["HF_TOKEN"] =  
+    # model =   ASTForGenreClassification.from_pretrained("./ast-merge/checkpoint-1350")
+    # model.push_to_hub("PolinaKozarovytska/ast_merge_1")
     main()
