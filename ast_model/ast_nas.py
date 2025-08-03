@@ -121,7 +121,7 @@ def get_confusion_matrix(predictions, label_encoder,name):
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=genre_names)
     disp.plot(ax=ax, xticks_rotation=90, cmap="Blues", colorbar=False)
     plt.title("Confusion Matrix")
-    plt.savefig(f"cm_{name}.pdf", bbox_inches="tight")
+    plt.savefig(f"best_cm_{name}.pdf", bbox_inches="tight")
     plt.close()
     genre_names = list(label_encoder.classes_)
 
@@ -134,12 +134,12 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
         
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
-                                activation_fn =trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
-                                normalisation = trial.suggest_categorical("normalisation", [ "layer", "none"]),
+                                activation_fn = "none", #trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
+                                normalisation = "none", #trial.suggest_categorical("normalisation", [ "layer", "none"]),
                                 batch_size =params.batch_size, 
-                                dropout_top =  trial.suggest_float(f"dropout_top", 0.0, 0.4),
-                                learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers =trial.suggest_int("freeze_layers", 0, 8),
+                                dropout_top =  0.3774326454800553, # trial.suggest_float(f"dropout_top", 0.0, 0.4),
+                                learning_rate = 0.00039480511382346874, # trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
+                                freeze_layers = 4, #trial.suggest_int("freeze_layers", 0, 8),
                                 id2label=id2label,
                                 label2id=label2id,
                                 )
@@ -298,7 +298,7 @@ def main():
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna.db",
+                                #storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, test_dataset = test_dataset,
                                             params = config, label_encoder = le, seed = seed), n_trials = config.num_trials)
