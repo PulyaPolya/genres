@@ -307,7 +307,7 @@ def main():
     df.to_csv("best_hyp.csv")
     
 if __name__ == "__main__":
-    # os.environ["HF_TOKEN"] =  
+    # os.environ["HF_TOKEN"] =   
     # model =   ASTForGenreClassification.from_pretrained("./ast-merge/checkpoint-1350")
-    # model.push_to_hub("PolinaKozarovytska/ast_merge_1")
+    # model.push_to_hub("PolinaKozarovytska/ast_merge")
     main()

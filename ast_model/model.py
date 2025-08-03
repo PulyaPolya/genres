@@ -10,7 +10,7 @@ class ASTGenreConfig(ASTConfig):
     def __init__(self, **kwargs):   # **kwargs: arbitrary number of key words arguments
         super().__init__(**kwargs)
         
-        self.num_labels =kwargs.get("num_labels", 10)
+        self.num_labels =kwargs.get("num_labels", 13)
         self.dropouts = kwargs.get("dropouts", 0.2)
         self.learning_rate = kwargs.get("learning_rate",3e-5 )
         self.freeze_layers = kwargs.get("freeze_layers", None)
