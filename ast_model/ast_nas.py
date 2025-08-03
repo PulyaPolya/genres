@@ -190,9 +190,9 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
-    push_to_hub=True,
-    hub_model_id=params.hf_model_id,
-    hub_strategy="end",  
+    #push_to_hub=True,
+    #hub_model_id=params.hf_model_id,
+    #hub_strategy="end",  
     #hub_strategy="checkpoint", # pushes all models regardless of eval acc
     save_total_limit=1,
     seed = params.seed,
@@ -218,8 +218,8 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     eval_result = trainer.evaluate()
     eval_accuracy = eval_result["eval_accuracy"]
     print("evaluating test")
-    # test_result = trainer.evaluate(eval_dataset=test_dataset)
-    # print(test_result)
+    test_result = trainer.evaluate(eval_dataset=test_dataset)
+    print(test_result)
     # global best_eval_acc
     # if eval_accuracy > best_eval_acc:
     #     print(f"pushing to hub")
@@ -234,7 +234,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     get_confusion_matrix(predictions, label_encoder, name)
     if params.wandb_name:
         wandb.log({"eval_accuracy": eval_result["eval_accuracy"],
-                 #"test_accuracy": test_result["eval_accuracy"],
+                 "test_accuracy": test_result["eval_accuracy"],
                    "seed":params.seed
                     #"confusion_matrix": wandb.Image("confusion_matrix.pdf")
                     })
@@ -265,7 +265,7 @@ def main():
     set_seed(seed)
     config.seed = seed
     print(seed)
-    os.environ["HF_TOKEN"] = config.hf_token
+    #os.environ["HF_TOKEN"] = config.hf_token
     split_artists = ArtistSplit(config.data_path, config.dataset_table)
     labels = split_artists.get_labels()
     le = LabelEncoder()
