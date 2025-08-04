@@ -24,7 +24,7 @@ import logging
 import json
 from dataclasses import dataclass
 from transformers import AutoModelForSequenceClassification
-from dataset import Augment, SpectrogramDataset, ArtistSplit, load_audio_data
+from dataset import Augment, SpectrogramDataset, ArtistSplit
 from model import ASTGenreConfig, ASTForGenreClassification
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
@@ -214,24 +214,21 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     print("evaluating val")
     eval_result = trainer.evaluate()
     eval_accuracy = eval_result["eval_accuracy"]
+    print(eval_accuracy)
     print("evaluating test")
-    test_result = trainer.evaluate(eval_dataset=test_dataset)
+    test_result = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
     print(test_result)
-    # global best_eval_acc
-    # if eval_accuracy > best_eval_acc:
-    #     print(f"pushing to hub")
-    #     best_eval_acc = eval_accuracy
-    #     trainer.save_model()       # writes best weights to ./ast-gtzan_cluster
-    #     trainer.push_to_hub(       # pushes that directory
-    #         commit_message=f"Upload best model at end of HPO seed {params.seed}",
-    #         blocking=True         # wait until upload finishes
-    #     )
+    test_accuracy = test_result["test_accuracy"]
+    print(test_accuracy)
     #getting confusion matrix 
     predictions = trainer.predict(test_dataset)
     get_confusion_matrix(predictions, label_encoder, name)
     if params.wandb_name:
-        wandb.log({"eval_accuracy": eval_result["eval_accuracy"]})
-        wandb.log({ "test_accuracy": test_result["eval_accuracy"]})
+        results = {
+            "eval_accuracy": eval_accuracy,
+            "test_accuracy": test_accuracy
+        }
+        wandb.log(results)
     del model, trainer
     torch.cuda.empty_cache()
     gc.collect()
@@ -272,17 +269,17 @@ def main():
     le.fit(labels)
     config.num_labels = len(le.classes_) 
     label_names_set = set(labels)
-    train_wav_data = load_audio_data(train_paths)
-    validation_wav_data = load_audio_data(val_paths)
-    test_wav_data = load_audio_data(test_paths)
+    # train_wav_data = load_audio_data(train_paths)
+    # validation_wav_data = load_audio_data(val_paths)
+    # test_wav_data = load_audio_data(test_paths)
     # adding augmentation class applied to the training data
-    transform = Augment( augment_prob = 0.5, preload = True)
+    transform = Augment( augment_prob = 0.5)
     train_dataset = SpectrogramDataset(train_paths, train_labels_enc, label_names_set = label_names_set,
-                                       transform = transform, augment = True, preload = True,  state = "train", wav_data=train_wav_data)
+                                       transform = transform, augment = True, state = "train")
     val_dataset = SpectrogramDataset(val_paths, validation_labels_enc, label_names_set= label_names_set,
-                                      transform = transform, augment = False, preload = True,  state = "valid", wav_data = validation_wav_data)
+                                      transform = transform, augment = False,  state = "valid")
     test_dataset = SpectrogramDataset(test_paths, test_labels_enc, label_names_set= label_names_set,
-                                       transform = transform, augment = False, preload = True, state = "test", wav_data = test_wav_data)
+                                       transform = transform, augment = False,  state = "test")
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
     sampler = optuna.samplers.TPESampler(seed=seed, 
                                          multivariate=True,
