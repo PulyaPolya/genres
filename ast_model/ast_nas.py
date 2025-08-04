@@ -54,7 +54,7 @@ class Config:
     num_trials : int = 1                # num optuna trials
     num_epochs : int = 10
     batch_size : int = 2
-    seed : int = 42
+    seed : int  | None = None
     hf_token : str | None = None
     hf_model_id : str | None = None
 
@@ -249,9 +249,7 @@ def main():
         #config = json.load(f, object_hook=lambda d: SimpleNamespace(**d))
         config_dict = json.load(f) 
     config = Config(**config_dict)
-    if config.RUN_NAS:
-        seed = 42
-    else:
+    if not config.seed:
         seed = random.randint(0, 2**31-1)
     set_seed(seed)
     config.seed = seed
@@ -269,10 +267,6 @@ def main():
     le.fit(labels)
     config.num_labels = len(le.classes_) 
     label_names_set = set(labels)
-    # train_wav_data = load_audio_data(train_paths)
-    # validation_wav_data = load_audio_data(val_paths)
-    # test_wav_data = load_audio_data(test_paths)
-    # adding augmentation class applied to the training data
     transform = Augment( augment_prob = 0.5)
     train_dataset = SpectrogramDataset(train_paths, train_labels_enc, label_names_set = label_names_set,
                                        transform = transform, augment = True, state = "train")
@@ -297,7 +291,7 @@ def main():
     df.to_csv("best_hyp.csv")
     
 if __name__ == "__main__":
-    # os.environ["HF_TOKEN"] =   
-    # model =   ASTForGenreClassification.from_pretrained("./ast-merge/checkpoint-1350")
-    # model.push_to_hub("PolinaKozarovytska/ast_merge")
-    main()
+    os.environ["HF_TOKEN"] =   "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"
+    model =   ASTForGenreClassification.from_pretrained("ast-merge/checkpoint-best_model_2")
+    model.push_to_hub("PolinaKozarovytska/ast_merge")
+    #main()
