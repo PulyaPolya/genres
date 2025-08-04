@@ -24,13 +24,13 @@ import logging
 import json
 from dataclasses import dataclass
 from transformers import AutoModelForSequenceClassification
-from dataset import Augment, SpectrogramDataset, ArtistSplit
+from dataset import Augment, SpectrogramDataset, ArtistSplit, load_audio_data
 from model import ASTGenreConfig, ASTForGenreClassification
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
 warnings.filterwarnings("ignore", message="`resume_download` is deprecated")
 #os.environ["WANDB_MODE"] = "offline"
 gpu = torch.cuda.is_available()
-
+best_eval_acc = 0.61
 def set_seed(seed=42):
     random.seed(seed)
     np.random.seed(seed)
@@ -54,6 +54,7 @@ class Config:
     num_trials : int = 1                # num optuna trials
     num_epochs : int = 10
     batch_size : int = 2
+    seed : int = 42
     hf_token : str | None = None
     hf_model_id : str | None = None
 
@@ -120,25 +121,25 @@ def get_confusion_matrix(predictions, label_encoder,name):
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=genre_names)
     disp.plot(ax=ax, xticks_rotation=90, cmap="Blues", colorbar=False)
     plt.title("Confusion Matrix")
-    plt.savefig(f"cm_{name}.pdf", bbox_inches="tight")
+    plt.savefig(f"best_cm_{name}.pdf", bbox_inches="tight")
     plt.close()
     genre_names = list(label_encoder.classes_)
 
 
-def objective(trial, train_dataset, val_dataset, params, label_encoder):
+def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_encoder, seed):
     if trial is not None:
         id2label = {i: label for i, label in enumerate(train_dataset.labels_names_set)}
         label2id = {label: i for i, label in enumerate(train_dataset.labels_names_set)}
        
-
+        
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
-                                activation_fn =  trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
-                                normalisation = trial.suggest_categorical("normalisation", [ "layer", "none"]),
+                                activation_fn = "none", #trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
+                                normalisation = "none", #trial.suggest_categorical("normalisation", [ "layer", "none"]),
                                 batch_size =params.batch_size, 
-                                dropout_top =trial.suggest_float(f"dropout_top", 0.0, 0.4),
-                                learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers = trial.suggest_int("freeze_layers", 0, 11),
+                                dropout_top =  0.3774326454800553, # trial.suggest_float(f"dropout_top", 0.0, 0.4),
+                                learning_rate = 0.00039480511382346874, # trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
+                                freeze_layers = 4, #trial.suggest_int("freeze_layers", 0, 8),
                                 id2label=id2label,
                                 label2id=label2id,
                                 )
@@ -148,7 +149,8 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
         else:
                 name = params.wandb_name
                 group = None
-        
+                #seed = random.randint(0, 2**31-1)
+        set_seed(seed)
         if params.wandb_name:
             
             wandb.init(project="ast_model", name=name, group = group, config=
@@ -173,7 +175,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
         print(hyperparams_df)
         summary(model)
     training_args = TrainingArguments(
-    output_dir="./ast-gtzan_cluster",
+    output_dir="./ast-merge",
     evaluation_strategy="epoch",
     save_strategy="epoch",
     logging_strategy="epoch",
@@ -188,12 +190,12 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
-    push_to_hub=False,
+    #push_to_hub=True,
     #hub_model_id=params.hf_model_id,
     #hub_strategy="end",  
-    #hub_strategy="checkpoint",
+    #hub_strategy="checkpoint", # pushes all models regardless of eval acc
     save_total_limit=1,
-    seed = 42,
+    seed = params.seed,
     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
 )    
     trainer = Trainer(
@@ -204,16 +206,36 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     tokenizer=None,
     data_collator=data_collator,
     compute_metrics=compute_metrics,
-    callbacks=[EarlyStoppingCallback(early_stopping_patience=7),
-               EarlyStoppingBelowThresholdCallback(threshold=0.4, patience=3)],
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=8),
+         #      EarlyStoppingBelowThresholdCallback(threshold=0.3, patience=3)
+         ],
 )
+    print(f"trial{trial.number} before")
+    print("Model hash before training:", hash(tuple(p.data_ptr() for p in model.parameters())))
+
     trainer.train()
+    print("evaluating val")
     eval_result = trainer.evaluate()
-    # getting confusion matrix 
+    eval_accuracy = eval_result["eval_accuracy"]
+    print("evaluating test")
+    test_result = trainer.evaluate(eval_dataset=test_dataset)
+    print(test_result)
+    # global best_eval_acc
+    # if eval_accuracy > best_eval_acc:
+    #     print(f"pushing to hub")
+    #     best_eval_acc = eval_accuracy
+    #     trainer.save_model()       # writes best weights to ./ast-gtzan_cluster
+    #     trainer.push_to_hub(       # pushes that directory
+    #         commit_message=f"Upload best model at end of HPO seed {params.seed}",
+    #         blocking=True         # wait until upload finishes
+    #     )
+    #getting confusion matrix 
     predictions = trainer.predict(val_dataset)
     get_confusion_matrix(predictions, label_encoder, name)
     if params.wandb_name:
-        wandb.log({"eval_accuracy": eval_result["eval_accuracy"]
+        wandb.log({"eval_accuracy": eval_result["eval_accuracy"],
+                 "test_accuracy": test_result["eval_accuracy"],
+                   "seed":params.seed
                     #"confusion_matrix": wandb.Image("confusion_matrix.pdf")
                     })
     del model, trainer
@@ -221,7 +243,7 @@ def objective(trial, train_dataset, val_dataset, params, label_encoder):
     gc.collect()
     wandb.finish()
 
-    return eval_result["eval_accuracy"]
+    return eval_accuracy
     
 
 
@@ -236,39 +258,56 @@ def main():
         #config = json.load(f, object_hook=lambda d: SimpleNamespace(**d))
         config_dict = json.load(f) 
     config = Config(**config_dict)
+    if config.RUN_NAS:
+        seed = 42
+    else:
+        seed = random.randint(0, 2**31-1)
+    set_seed(seed)
+    config.seed = seed
+    print(seed)
+    #os.environ["HF_TOKEN"] = config.hf_token
     split_artists = ArtistSplit(config.data_path, config.dataset_table)
     labels = split_artists.get_labels()
     le = LabelEncoder()
     le.fit(labels)
     config.num_labels = len(le.classes_) 
-    train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits()
+    train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits(seed = seed)
     train_labels_enc = le.transform(train_labels)
-    validation_labels_enc = le.transform(val_labels)    
+    validation_labels_enc = le.transform(val_labels) 
+    test_labels_enc = le.transform(test_labels)   
     le = LabelEncoder()
     le.fit(labels)
     config.num_labels = len(le.classes_) 
     label_names_set = set(labels)
+    train_wav_data = load_audio_data(train_paths)
+    validation_wav_data = load_audio_data(val_paths)
+    test_wav_data = load_audio_data(test_paths)
     # adding augmentation class applied to the training data
-    transform = Augment( augment_prob = 0.5)
-    train_dataset = SpectrogramDataset(train_paths, train_labels_enc, label_names_set = label_names_set,transform = transform, augment = True, state = "train")
-    val_dataset = SpectrogramDataset(val_paths, validation_labels_enc, label_names_set= label_names_set, transform = transform, augment = False, state = "valid")
+    transform = Augment( augment_prob = 0.5, preload = True)
+    train_dataset = SpectrogramDataset(train_paths, train_labels_enc, label_names_set = label_names_set,
+                                       transform = transform, augment = True, preload = True,  state = "train", wav_data=train_wav_data)
+    val_dataset = SpectrogramDataset(val_paths, validation_labels_enc, label_names_set= label_names_set,
+                                      transform = transform, augment = False, preload = True,  state = "valid", wav_data = validation_wav_data)
+    test_dataset = SpectrogramDataset(test_paths, test_labels_enc, label_names_set= label_names_set,
+                                       transform = transform, augment = False, preload = True, state = "test", wav_data = test_wav_data)
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
-    sampler = optuna.samplers.TPESampler(seed=42, 
+    sampler = optuna.samplers.TPESampler(seed=seed, 
                                          multivariate=True,
                                          warn_independent_sampling=False)
     study = optuna.create_study(study_name=config.optuna_name,
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna.db",
+                                #storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
-    study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, params = config, label_encoder = le), n_trials = config.num_trials)
-    best_trial = study.best_trial
+    study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, test_dataset = test_dataset,
+                                            params = config, label_encoder = le, seed = seed), n_trials = config.num_trials)
     print("Best hyperparameters:", study.best_params)
     df = pd.DataFrame(study.best_params, index = ['i',])
     df.to_csv("best_hyp.csv")
     
 if __name__ == "__main__":
-    # model =   ASTForGenreClassification.from_pretrained("./ast-gtzan_cluster/checkpoint-1575")
-    # model.push_to_hub("PolinaKozarovytska/ast")
+    # os.environ["HF_TOKEN"] =   
+    # model =   ASTForGenreClassification.from_pretrained("./ast-merge/checkpoint-1350")
+    # model.push_to_hub("PolinaKozarovytska/ast_merge")
     main()

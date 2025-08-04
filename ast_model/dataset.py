@@ -17,8 +17,22 @@ import random
 from sklearn.model_selection import GroupShuffleSplit
 from beat_this.preprocessing import LogMelSpect #load_audio
 
+def load_audio_data( paths):
+    audio_cache = {}
+    for path in paths:
+            #audio_cache[p] = self._load_audio_data(p)
+        try:
+            waveform, sr = torchaudio.load(path, channels_first=False)
+            audio_cache[path] = np.asanyarray(waveform.squeeze().numpy(), dtype="float64")
+            
+        except Exception as e:
+            print(f"problems with the file{path}")
+            print(e)
+            #return sf.read(path, dtype="float64")
+    return audio_cache
+
 class SpectrogramDataset(Dataset):
-    def __init__(self, path, labels, label_names_set, transform = None, augment = False, state= "train", overlap = 20):
+    def __init__(self, path, labels, label_names_set, transform = None, augment = False, state= "train", overlap = 20, preload = False, wav_data = None):
         self.paths = path
         self.labels = labels
         self.max_time = 1020  # in order to match the input dimension
@@ -29,6 +43,21 @@ class SpectrogramDataset(Dataset):
         self.labels_names_set = label_names_set # storing the genre names 
         self.num_crops  = 2
         self.overlap    = overlap
+        self.preload = preload
+        #self.audio_cache = {}
+
+        if self.preload:
+            print("🔹 Preloading all audio files into memory...")
+          
+            self.audio_cache = wav_data
+    
+    def _load_audio_data(self, path):
+        try:
+            waveform, sr = torchaudio.load(path, channels_first=False)
+            return np.asanyarray(waveform.squeeze().numpy(), dtype="float64"), sr
+        except:
+            return sf.read(path, dtype="float64")
+
         
     def __len__(self):
         if self.state == "train":
@@ -40,13 +69,21 @@ class SpectrogramDataset(Dataset):
         #spec = self.spectrograms[idx]  # shape: (128, time)
         audio_idx = idx // self.num_crops if self.state == "train" else idx
         crop_idx  = idx % self.num_crops
-
-        if self.transform:
-            spec =self.transform(self.paths[audio_idx], self.augment)
-            if spec is  None:
-                 return self.__getitem__((idx + 1) % len(self))
+        if self.preload:
+            waveform = self.audio_cache[self.paths[audio_idx]]
+            spec = self.transform(waveform, self.augment)
         else:
-            spec = self.data[self.paths[audio_idx]]
+            spec = self.transform(self.paths[audio_idx], self.augment)
+        # if spec is  None:
+        #          return self.__getitem__((idx + 1) % len(self))
+
+
+        # if self.transform:
+        #     spec =self.transform(self.paths[audio_idx], self.augment)
+        #     if spec is  None:
+        #          return self.__getitem__((idx + 1) % len(self))
+        # else:
+        #     spec = self.data[self.paths[audio_idx]]
         if spec.ndim == 3 and spec.shape[0] == 1:
             spec = spec.squeeze(0)
         T = spec.shape[0]
@@ -79,10 +116,11 @@ class SpectrogramDataset(Dataset):
     
 
 class Augment:
-    def __init__(self, out_sr = 22050, aug_sr = 44100, mel_params = None, augm_params = None, augment_prob = 0.3):
+    def __init__(self, out_sr = 22050, aug_sr = 44100, mel_params = None, augm_params = None, augment_prob = 0.3, preload = False):
         self.out_sr= out_sr
         self.aug_sr=aug_sr            
         self.augment_prob = augment_prob
+        self.preload = True
         default_mel_params = dict(
                         n_fft=1024,
                         hop_length=441,
@@ -96,7 +134,7 @@ class Augment:
         default_augm_params = dict(
                 time_stretch= (20,4),
                 pitch_shift = (-5,6),
-                noise = 5
+                noise = 3
             )
         self.mel_params = mel_params if mel_params is not None else default_mel_params
         self.augm_params = augm_params if augm_params is not None else default_augm_params
@@ -115,14 +153,17 @@ class Augment:
                 raise RuntimeError(f'Could not load audio from "{path}".')
     def __call__(self, audio_path, augment = False, cut = False):
         try:
-            waveform, sr = self.load_audio(audio_path)
+            if not self.preload:
+                waveform, sr = self.load_audio(audio_path)
+            else: 
+                waveform = audio_path
             #waveform, sr = torchaudio.load(audio_path, channels_first=False)
         except Exception as e:
             print(f"[WARN] Skipping unreadable file: {audio_path}. Reason: {e}")
             return None
-        assert (
-                    sr == self.out_sr
-                ), f"Sample rate mismatch: {sr} != {self.out_sr}"
+        # assert (
+        #             sr == self.out_sr
+        #         ), f"Sample rate mismatch: {sr} != {self.out_sr}"
         if augment and random.random() < self.augment_prob:
             waveform = np.asarray(waveform, dtype=np.float32)
             transformation = random.choice(["noise", "stretch", "pitch"])
@@ -252,15 +293,14 @@ class ArtistSplit:
                     return df_train, df_val, df_test
 
         raise RuntimeError("Could not find a balanced grouping within tol")
-    def create_splits(self, val_size = 0.2, test_size = 0.1):        # the main function here that does the job
+    def create_splits(self, val_size = 0.2, test_size = 0.1, seed = 42):        # the main function here that does the job
         df = pd.read_csv(self.dataset_csv)
         #getting splits with non-intersecting artists balanced as possible
-        df_train, df_val, df_test = self.balanced_group_split(df, test_size, val_size,
+        df_train, df_val, df_test = self.balanced_group_split(df = df, test_size = test_size, val_size = val_size, seed = seed,
                          group_col='artist',
                          class_col='genre',
                          tol=0.018,
-                         seed=42,
-                         max_tries=10000)
+                        max_tries=100000)
         genres = set(df["genre"].unique()) 
         val_genre_counts = {}
         for genre in genres:
