@@ -126,7 +126,7 @@ def get_confusion_matrix(predictions, label_encoder,name):
     genre_names = list(label_encoder.classes_)
 
 
-def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_encoder, seed):
+def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_encoder):
     if trial is not None:
         id2label = {i: label for i, label in enumerate(train_dataset.labels_names_set)}
         label2id = {label: i for i, label in enumerate(train_dataset.labels_names_set)}
@@ -149,10 +149,8 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
         else:
                 name = params.wandb_name
                 group = None
-                #seed = random.randint(0, 2**31-1)
-        set_seed(seed)
+        set_seed(params.seed)
         if params.wandb_name:
-            
             wandb.init(project="ast_model", name=name, group = group, config=
                         {
                             "activation_fn" : config.activation_fn,
@@ -160,9 +158,8 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
                             "dropout" : config.dropout_top, 
                             "freeze_layers" :  config.freeze_layers,
                             "learning_rate" : config.learning_rate,
-                            "batch_size" : config.batch_size
-                            #"gradient_accumulation": config.gradient_accumulation_steps
-
+                            "batch_size" : config.batch_size,
+                            "seed":params.seed
                         })
     else:   
         config = ASTGenreConfig()
@@ -190,11 +187,11 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
-    #push_to_hub=True,
-    #hub_model_id=params.hf_model_id,
-    #hub_strategy="end",  
+    push_to_hub=True,
+    hub_model_id=params.hf_model_id,
+    hub_strategy="end",  
     #hub_strategy="checkpoint", # pushes all models regardless of eval acc
-    save_total_limit=1,
+    save_total_limit=5,
     seed = params.seed,
     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
 )    
@@ -233,11 +230,8 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     predictions = trainer.predict(test_dataset)
     get_confusion_matrix(predictions, label_encoder, name)
     if params.wandb_name:
-        wandb.log({"eval_accuracy": eval_result["eval_accuracy"],
-                 "test_accuracy": test_result["eval_accuracy"],
-                   "seed":params.seed
-                    #"confusion_matrix": wandb.Image("confusion_matrix.pdf")
-                    })
+        wandb.log({"eval_accuracy": eval_result["eval_accuracy"]})
+        wandb.log({ "test_accuracy": test_result["eval_accuracy"]})
     del model, trainer
     torch.cuda.empty_cache()
     gc.collect()
@@ -264,8 +258,7 @@ def main():
         seed = random.randint(0, 2**31-1)
     set_seed(seed)
     config.seed = seed
-    print(seed)
-    #os.environ["HF_TOKEN"] = config.hf_token
+    os.environ["HF_TOKEN"] = config.hf_token
     split_artists = ArtistSplit(config.data_path, config.dataset_table)
     labels = split_artists.get_labels()
     le = LabelEncoder()
@@ -301,7 +294,7 @@ def main():
                                 #storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, test_dataset = test_dataset,
-                                            params = config, label_encoder = le, seed = seed), n_trials = config.num_trials)
+                                            params = config, label_encoder = le), n_trials = config.num_trials)
     print("Best hyperparameters:", study.best_params)
     df = pd.DataFrame(study.best_params, index = ['i',])
     df.to_csv("best_hyp.csv")
