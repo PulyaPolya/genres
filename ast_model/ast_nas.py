@@ -121,7 +121,7 @@ def get_confusion_matrix(predictions, label_encoder,name):
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=genre_names)
     disp.plot(ax=ax, xticks_rotation=90, cmap="Blues", colorbar=False)
     plt.title("Confusion Matrix")
-    plt.savefig(f"best_cm_{name}.pdf", bbox_inches="tight")
+    plt.savefig(f"test_best_cm_{name}.pdf", bbox_inches="tight")
     plt.close()
     genre_names = list(label_encoder.classes_)
 
@@ -230,7 +230,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     #         blocking=True         # wait until upload finishes
     #     )
     #getting confusion matrix 
-    predictions = trainer.predict(val_dataset)
+    predictions = trainer.predict(test_dataset)
     get_confusion_matrix(predictions, label_encoder, name)
     if params.wandb_name:
         wandb.log({"eval_accuracy": eval_result["eval_accuracy"],
