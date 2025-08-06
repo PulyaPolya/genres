@@ -187,11 +187,11 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
-    push_to_hub=True,
+    push_to_hub=False,
     hub_model_id=params.hf_model_id,
     hub_strategy="end",  
     #hub_strategy="checkpoint", # pushes all models regardless of eval acc
-    save_total_limit=5,
+    save_total_limit=1,
     seed = params.seed,
     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
 )    
@@ -214,7 +214,8 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     print("evaluating val")
     eval_result = trainer.evaluate()
     eval_accuracy = eval_result["eval_accuracy"]
-    print(eval_accuracy)
+    print(eval_result)
+    #print(eval_accuracy)
     print("evaluating test")
     test_result = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
     print(test_result)
@@ -250,16 +251,15 @@ def main():
         config_dict = json.load(f) 
     config = Config(**config_dict)
     if not config.seed:
-        seed = random.randint(0, 2**31-1)
-    set_seed(seed)
-    config.seed = seed
+        config.seed = random.randint(0, 2**31-1)
+    set_seed(config.seed)
     os.environ["HF_TOKEN"] = config.hf_token
     split_artists = ArtistSplit(config.data_path, config.dataset_table)
     labels = split_artists.get_labels()
     le = LabelEncoder()
     le.fit(labels)
     config.num_labels = len(le.classes_) 
-    train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits(seed = seed)
+    train_paths, train_labels, val_paths, val_labels, test_paths, test_labels = split_artists.create_splits(seed = config.seed)
     train_labels_enc = le.transform(train_labels)
     validation_labels_enc = le.transform(val_labels) 
     test_labels_enc = le.transform(test_labels)   
@@ -275,7 +275,7 @@ def main():
     test_dataset = SpectrogramDataset(test_paths, test_labels_enc, label_names_set= label_names_set,
                                        transform = transform, augment = False,  state = "test")
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
-    sampler = optuna.samplers.TPESampler(seed=seed, 
+    sampler = optuna.samplers.TPESampler(seed=config.seed, 
                                          multivariate=True,
                                          warn_independent_sampling=False)
     study = optuna.create_study(study_name=config.optuna_name,
@@ -291,7 +291,7 @@ def main():
     df.to_csv("best_hyp.csv")
     
 if __name__ == "__main__":
-    os.environ["HF_TOKEN"] =   "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"
-    model =   ASTForGenreClassification.from_pretrained("ast-merge/checkpoint-best_model_2")
-    model.push_to_hub("PolinaKozarovytska/ast_merge")
-    #main()
+    # os.environ["HF_TOKEN"] =   "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"
+    # model =   ASTForGenreClassification.from_pretrained("ast-merge/checkpoint-best_model_2")
+    # model.push_to_hub("PolinaKozarovytska/ast_merge")
+    main()
