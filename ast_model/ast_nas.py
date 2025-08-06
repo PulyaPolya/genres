@@ -225,11 +225,12 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     predictions = trainer.predict(test_dataset)
     get_confusion_matrix(predictions, label_encoder, name)
     if params.wandb_name:
-        results = {
-            "eval_accuracy": eval_accuracy,
-            "test_accuracy": test_accuracy
-        }
-        wandb.log(results)
+        # results = {
+        #     "eval_accuracy": eval_accuracy,
+        #     "test_accuracy": test_accuracy
+        # }
+        wandb.log(eval_result)
+        wandb.log(test_result)
     del model, trainer
     torch.cuda.empty_cache()
     gc.collect()
@@ -237,12 +238,26 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
 
     return eval_accuracy
     
-
+accuracy = evaluate.load("accuracy")
+precision = evaluate.load("precision")
+recall = evaluate.load("recall")
+f1 = evaluate.load("f1")
 
 def compute_metrics(eval_pred):
     logits, labels = eval_pred
     predictions = np.argmax(logits, axis=1)
-    return metric.compute(predictions=predictions, references=labels)
+    return {
+        "accuracy": accuracy.compute(predictions=predictions, references=labels)["accuracy"],
+        "precision": precision.compute(predictions=predictions, references=labels, average="macro")["precision"],
+        "recall": recall.compute(predictions=predictions, references=labels, average="macro")["recall"],
+        "f1": f1.compute(predictions=predictions, references=labels, average="macro")["f1"],
+    }
+
+# def compute_metrics(eval_pred):
+#     logits, labels = eval_pred
+#     predictions = np.argmax(logits, axis=1)
+#     clf_metrics = evaluate.combine(["accuracy", "f1", "precision", "recall"])
+#     return clf_metrics.compute(predictions=predictions, references=labels)
 
 def main():
     print(torch.cuda.is_available())
