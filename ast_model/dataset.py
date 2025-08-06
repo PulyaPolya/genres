@@ -220,9 +220,10 @@ class ArtistSplit:
         - each split’s genre distribution is within tol of overall
         """
         rng = np.random.RandomState(seed)
+        # always have the same seed for train-test split
         gss   = GroupShuffleSplit(n_splits=max_tries,
                                 test_size=test_size,
-                                random_state=seed)
+                                random_state=42)
 
         genres = df[class_col].value_counts(normalize=True)
         for trainval_idx, test_idx in gss.split(df, groups=df[group_col]):
