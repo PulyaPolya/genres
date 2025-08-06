@@ -1,6 +1,7 @@
 from transformers import PreTrainedModel, DefaultDataCollator, ASTModel, ASTConfig,  Trainer, TrainingArguments
 from transformers import EarlyStoppingCallback, TrainerCallback, TrainerState, TrainerControl
 import random
+from transformers import get_polynomial_decay_schedule_with_warmup
 from os import listdir
 from os.path import isfile, join
 from sklearn.preprocessing import LabelEncoder
@@ -164,6 +165,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     else:   
         config = ASTGenreConfig()
     model = ASTForGenreClassification(config=config)
+    
     if trial:
         #print(f"hyperparameters chosen: num_layers = {num_layers_top}")
         hyperparams = {key : getattr(config, key) for key in ["num_labels", "activation_fn", "dropout_top", "learning_rate", "learning_rate", "freeze_layers", "normalisation", "batch_size"]} #"normalisation"
@@ -187,6 +189,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
+    #lr_scheduler_type="cosine",  
     push_to_hub=False,
     hub_model_id=params.hf_model_id,
     hub_strategy="end",  
@@ -195,6 +198,22 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     seed = params.seed,
     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
 )    
+    optimizer = torch.optim.AdamW(model.parameters(), lr=training_args.learning_rate)
+
+# 2) total training steps
+    train_batch_size = training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps
+    steps_per_epoch   = len(train_dataset) // train_batch_size
+    total_steps       = steps_per_epoch * training_args.num_train_epochs
+
+    # 3) your custom polynomial scheduler
+    scheduler = get_polynomial_decay_schedule_with_warmup(
+        optimizer=optimizer,
+        num_warmup_steps=training_args.warmup_steps,
+        num_training_steps=total_steps,
+        power=2.0,     # ← here’s your degree
+        lr_end=0.0,
+    )
+
     trainer = Trainer(
     model = model,
     args=training_args,
@@ -206,9 +225,11 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     callbacks=[EarlyStoppingCallback(early_stopping_patience=8),
          #      EarlyStoppingBelowThresholdCallback(threshold=0.3, patience=3)
          ],
+     optimizers=(optimizer, scheduler),
 )
-    print(f"trial{trial.number} before")
-    print("Model hash before training:", hash(tuple(p.data_ptr() for p in model.parameters())))
+   
+    # print(f"trial{trial.number} before")
+    # print("Model hash before training:", hash(tuple(p.data_ptr() for p in model.parameters())))
 
     trainer.train()
     print("evaluating val")
