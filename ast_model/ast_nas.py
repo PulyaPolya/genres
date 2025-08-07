@@ -190,7 +190,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     greater_is_better=True,
     report_to = ["wandb"],
     #lr_scheduler_type="cosine",  
-    push_to_hub=False,
+    push_to_hub=True,
     hub_model_id=params.hf_model_id,
     hub_strategy="end",  
     #hub_strategy="checkpoint", # pushes all models regardless of eval acc
@@ -222,7 +222,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     tokenizer=None,
     data_collator=data_collator,
     compute_metrics=compute_metrics,
-    callbacks=[EarlyStoppingCallback(early_stopping_patience=8),
+    callbacks=[EarlyStoppingCallback(early_stopping_patience=7),
          #      EarlyStoppingBelowThresholdCallback(threshold=0.3, patience=3)
          ],
      optimizers=(optimizer, scheduler),
