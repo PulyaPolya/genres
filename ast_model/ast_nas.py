@@ -228,7 +228,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     num_warmup_steps=fake_warmup_steps,
     num_training_steps=fake_total_steps,
     power=1.0,       # linear
-    lr_end=1e-8,     # nonzero floor
+    lr_end=1e-5,     # nonzero floor
 )
 
     trainer = Trainer(
