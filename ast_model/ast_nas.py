@@ -1,6 +1,7 @@
 from transformers import PreTrainedModel, DefaultDataCollator, ASTModel, ASTConfig,  Trainer, TrainingArguments
 from transformers import EarlyStoppingCallback, TrainerCallback, TrainerState, TrainerControl
 import random
+from transformers import get_polynomial_decay_schedule_with_warmup
 from os import listdir
 from os.path import isfile, join
 from sklearn.preprocessing import LabelEncoder
@@ -23,7 +24,7 @@ import warnings
 import logging
 import json
 from dataclasses import dataclass
-from transformers import AutoModelForSequenceClassification
+from transformers import AutoModelForSequenceClassification, get_linear_schedule_with_warmup
 from dataset import Augment, SpectrogramDataset, ArtistSplit
 from model import ASTGenreConfig, ASTForGenreClassification
 logging.getLogger("torch.distributed.elastic.multiprocessing.redirects").setLevel(logging.ERROR)
@@ -164,6 +165,7 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     else:   
         config = ASTGenreConfig()
     model = ASTForGenreClassification(config=config)
+    
     if trial:
         #print(f"hyperparameters chosen: num_layers = {num_layers_top}")
         hyperparams = {key : getattr(config, key) for key in ["num_labels", "activation_fn", "dropout_top", "learning_rate", "learning_rate", "freeze_layers", "normalisation", "batch_size"]} #"normalisation"
@@ -187,7 +189,8 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     gradient_accumulation_steps=8,
     greater_is_better=True,
     report_to = ["wandb"],
-    push_to_hub=False,
+    #lr_scheduler_type="cosine",  
+    push_to_hub=True,
     hub_model_id=params.hf_model_id,
     hub_strategy="end",  
     #hub_strategy="checkpoint", # pushes all models regardless of eval acc
@@ -195,6 +198,39 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     seed = params.seed,
     warmup_ratio=0.1  #proportion of training to be dedicated to a linear warmup where learning rate gradually increases.   
 )    
+    optimizer = torch.optim.AdamW(model.parameters(), lr=training_args.learning_rate)
+
+# 2) total training steps
+    # train_batch_size = training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps
+    # steps_per_epoch   = len(train_dataset) // train_batch_size
+    # total_steps       = steps_per_epoch * training_args.num_train_epochs
+    
+    # # 3) your custom polynomial scheduler
+    # scheduler = get_polynomial_decay_schedule_with_warmup(
+    #     optimizer=optimizer,
+    #     num_warmup_steps=training_args.warmup_steps,
+    #     num_training_steps=total_steps,
+    #     power=3.0,     # ← here’s your degree
+    #     lr_end=0.0,
+    # )
+    steps_per_epoch = len(train_dataset) // (
+    training_args.per_device_train_batch_size
+    * training_args.gradient_accumulation_steps
+)
+
+# 3) FIXED “15-epoch” total steps
+    fake_total_steps = steps_per_epoch * 15
+    fake_warmup_steps = int(training_args.warmup_ratio * fake_total_steps)  # or a constant
+
+    # 4) build your linear scheduler over 15 “epochs”
+    scheduler = get_polynomial_decay_schedule_with_warmup(
+    optimizer=optimizer,
+    num_warmup_steps=fake_warmup_steps,
+    num_training_steps=fake_total_steps,
+    power=1.0,       # linear
+    lr_end=1e-5,     # nonzero floor
+)
+
     trainer = Trainer(
     model = model,
     args=training_args,
@@ -206,9 +242,11 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     callbacks=[EarlyStoppingCallback(early_stopping_patience=8),
          #      EarlyStoppingBelowThresholdCallback(threshold=0.3, patience=3)
          ],
+     optimizers=(optimizer, scheduler),
 )
-    print(f"trial{trial.number} before")
-    print("Model hash before training:", hash(tuple(p.data_ptr() for p in model.parameters())))
+   
+    # print(f"trial{trial.number} before")
+    # print("Model hash before training:", hash(tuple(p.data_ptr() for p in model.parameters())))
 
     trainer.train()
     print("evaluating val")
@@ -306,7 +344,7 @@ def main():
     df.to_csv("best_hyp.csv")
     
 if __name__ == "__main__":
-    # os.environ["HF_TOKEN"] =   "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"
-    # model =   ASTForGenreClassification.from_pretrained("ast-merge/checkpoint-best_model_2")
+    # os.environ["HF_TOKEN"] =  
+    # model =   ASTForGenreClassification.from_pretrained(r"C:\Users\Kochana\projects\genres\ast-merge\best_model_fake_15")
     # model.push_to_hub("PolinaKozarovytska/ast_merge")
     main()
