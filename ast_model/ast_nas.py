@@ -335,7 +335,7 @@ def main():
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                #storage = "sqlite:///optuna.db",
+                                storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, train_dataset= train_dataset,  val_dataset = val_dataset, test_dataset = test_dataset,
                                             params = config, label_encoder = le), n_trials = config.num_trials)
