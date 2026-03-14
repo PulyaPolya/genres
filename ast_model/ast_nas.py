@@ -135,12 +135,12 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
         
         config = ASTGenreConfig(
                                 num_labels = params.num_labels, 
-                                activation_fn = "none", #trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
-                                normalisation = "none", #trial.suggest_categorical("normalisation", [ "layer", "none"]),
+                                activation_fn = trial.suggest_categorical("nonlinearity", ["relu", "gelu", "none"]),
+                                normalisation = trial.suggest_categorical("normalisation", [ "layer", "none"]),
                                 batch_size =params.batch_size, 
-                                dropout_top =  0.3774326454800553, # trial.suggest_float(f"dropout_top", 0.0, 0.4),
-                                learning_rate = 0.00039480511382346874, # trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
-                                freeze_layers = 4, #trial.suggest_int("freeze_layers", 0, 8),
+                                dropout_top =  trial.suggest_float(f"dropout_top", 0.0, 0.4),
+                                learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-3, log = True) ,
+                                freeze_layers = trial.suggest_int("freeze_layers", 0, 8),
                                 id2label=id2label,
                                 label2id=label2id,
                                 )
@@ -200,29 +200,13 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
 )    
     optimizer = torch.optim.AdamW(model.parameters(), lr=training_args.learning_rate)
 
-# 2) total training steps
-    # train_batch_size = training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps
-    # steps_per_epoch   = len(train_dataset) // train_batch_size
-    # total_steps       = steps_per_epoch * training_args.num_train_epochs
-    
-    # # 3) your custom polynomial scheduler
-    # scheduler = get_polynomial_decay_schedule_with_warmup(
-    #     optimizer=optimizer,
-    #     num_warmup_steps=training_args.warmup_steps,
-    #     num_training_steps=total_steps,
-    #     power=3.0,     # ← here’s your degree
-    #     lr_end=0.0,
-    # )
     steps_per_epoch = len(train_dataset) // (
     training_args.per_device_train_batch_size
     * training_args.gradient_accumulation_steps
 )
-
-# 3) FIXED “15-epoch” total steps
     fake_total_steps = steps_per_epoch * 15
     fake_warmup_steps = int(training_args.warmup_ratio * fake_total_steps)  # or a constant
 
-    # 4) build your linear scheduler over 15 “epochs”
     scheduler = get_polynomial_decay_schedule_with_warmup(
     optimizer=optimizer,
     num_warmup_steps=fake_warmup_steps,
@@ -245,15 +229,13 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
      optimizers=(optimizer, scheduler),
 )
    
-    # print(f"trial{trial.number} before")
-    # print("Model hash before training:", hash(tuple(p.data_ptr() for p in model.parameters())))
 
     trainer.train()
     print("evaluating val")
     eval_result = trainer.evaluate()
     eval_accuracy = eval_result["eval_accuracy"]
     print(eval_result)
-    #print(eval_accuracy)
+
     print("evaluating test")
     test_result = trainer.evaluate(eval_dataset=test_dataset, metric_key_prefix="test")
     print(test_result)
@@ -263,10 +245,6 @@ def objective(trial, train_dataset, val_dataset,test_dataset,  params, label_enc
     predictions = trainer.predict(test_dataset)
     get_confusion_matrix(predictions, label_encoder, name)
     if params.wandb_name:
-        # results = {
-        #     "eval_accuracy": eval_accuracy,
-        #     "test_accuracy": test_accuracy
-        # }
         wandb.log(eval_result)
         wandb.log(test_result)
     del model, trainer
@@ -291,16 +269,10 @@ def compute_metrics(eval_pred):
         "f1": f1.compute(predictions=predictions, references=labels, average="macro")["f1"],
     }
 
-# def compute_metrics(eval_pred):
-#     logits, labels = eval_pred
-#     predictions = np.argmax(logits, axis=1)
-#     clf_metrics = evaluate.combine(["accuracy", "f1", "precision", "recall"])
-#     return clf_metrics.compute(predictions=predictions, references=labels)
 
 def main():
     print(torch.cuda.is_available())
     with open ("ast_training_params.json") as f:
-        #config = json.load(f, object_hook=lambda d: SimpleNamespace(**d))
         config_dict = json.load(f) 
     config = Config(**config_dict)
     if not config.seed:
@@ -344,7 +316,4 @@ def main():
     df.to_csv("best_hyp.csv")
     
 if __name__ == "__main__":
-    # os.environ["HF_TOKEN"] =  
-    # model =   ASTForGenreClassification.from_pretrained(r"C:\Users\Kochana\projects\genres\ast-merge\best_model_fake_15")
-    # model.push_to_hub("PolinaKozarovytska/ast_merge")
     main()
