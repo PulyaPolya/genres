@@ -39,7 +39,6 @@ class ASTForGenreClassification(PreTrainedModel):
     def get_activation(self, activation_fn) -> nn.Module:
         acrivation_mapping = {
         "relu":  nn.ReLU(),
-       # "tanh":  nn.Tanh(),
         "gelu":  nn.GELU(),
         "none":  nn.Identity(),
     }

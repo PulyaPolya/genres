@@ -67,13 +67,10 @@ class SpectrogramDataset(Dataset):
         #spec = spec[start: start + self.max_time, :]
 
         spec = spec[:self.max_time, :]
-        #spec = spec.float()
-        #spec = torch.tensor(spec, dtype=torch.float32)
         if isinstance(spec, np.ndarray):
             spec = torch.from_numpy(spec).float()
         else:
             spec = spec.detach().clone().float()
-        #spec = spec.unsqueeze(0)
         label = self.labels[audio_idx]
         return {"input_values": spec, "labels": int(label)}
     
