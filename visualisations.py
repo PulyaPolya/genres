@@ -10,7 +10,7 @@ import math
 from matplotlib.patches import Patch
 
 
-def get_tsne_plots(spectrograms_scaled):
+def get_tsne_plots(spectrograms_scaled, true_labels_enc,label_names ):
     X_2d = TSNE(n_components=2, random_state=42).fit_transform(spectrograms_scaled)
     #X_2d = spectrograms_reduced.copy()
 
@@ -196,4 +196,56 @@ def beat_this_scratch_run():
     plt.tight_layout()
     plt.savefig(f"figures/bad_example_beat_grid.pdf", format="pdf", bbox_inches="tight")
 
+    plt.show()
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+def plot_ch_with_std(df):
+    """
+    Plots CH_mean over Layer with CH_std as shaded region.
+    Points are coloured discretely based on Num_Clusters (2,3,4)
+    and shown in a legend instead of a colorbar.
+    """
+
+    df = df.sort_values("Layer")
+
+    layers = df["Layer"].values
+    ch_mean = df["CH_mean"].values
+    ch_std = df["CH_std"].values
+
+    plt.figure(figsize=(8,5))
+
+    # Mean line
+    plt.plot(layers, ch_mean)
+
+    # Std shading
+    plt.fill_between(
+        layers,
+        ch_mean - ch_std,
+        ch_mean + ch_std,
+        alpha=0.3
+    )
+
+    # Discrete scatter per cluster
+    unique_clusters = sorted(df["Num_Clusters"].unique())
+    colors = [ "green",  "#f5b114", "red",]
+    for i, cluster in enumerate(unique_clusters):
+        subset = df[df["Num_Clusters"] == cluster]
+        plt.scatter(
+            subset["Layer"],
+            subset["CH_mean"],
+            marker="o",
+
+            s=40,              # increase size (default ≈ 20–40)
+            label=f"{cluster}",
+            c=colors[i],
+            zorder=3     
+        )
+    plt.ylim(0, 11000)
+    plt.xlabel("AST Layer")
+    plt.ylabel("CH index")
+    plt.grid(True, alpha=0.3)
+    plt.legend(title="# clusters")
+    plt.savefig("figures/ch_plot_grid.pdf")
     plt.show()
