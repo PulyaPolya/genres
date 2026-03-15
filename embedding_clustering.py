@@ -36,7 +36,8 @@ from permetrics import ClusteringMetric
 import pandas as pd
 import numpy as np
 import re
-
+from sklearn.metrics import precision_score, recall_score
+from scipy.optimize import linear_sum_assignment
 
 ast_base = ASTModel.from_pretrained("MIT/ast-finetuned-audioset-10-10-0.4593")
 harmonix_metadata = pd.read_csv("dataset/metadata_harmonix.csv")
@@ -404,9 +405,59 @@ def cluster_points(name,spectrograms_reduced,  num_cluster = None, seed = 42,
             predicted_labels = hdbscan.labels_+1  # treating noise as cluster
     return predicted_labels
 
+def greedy_cluster_mapping(y_true, y_pred):
+    D = max(y_pred.max(), y_true.max()) + 1
+    cost_matrix = np.zeros((D, D), dtype=np.int64)
+
+    for i in range(len(y_pred)):
+        cost_matrix[y_pred[i], y_true[i]] += 1
+    mapping = {}
+    used_true_labels = set()
+    for _ in range(D):
+        cluster, genre = divmod(np.argmax(cost_matrix), cost_matrix.shape[1])
+        while genre in used_true_labels:
+            cost_matrix[cluster, genre] = -1  # Mark as invalid
+            cluster, genre = divmod(np.argmax(cost_matrix), cost_matrix.shape[1])
+        mapping[cluster] = genre
+        used_true_labels.add(genre)
+        cost_matrix[cluster, :] = -1
+
+    return mapping
+
+def hungarian_cluster_mapping(y_true, y_pred):
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    pred_labels = np.unique(y_pred)
+    true_labels = np.unique(y_true)
+    pred_index = {l: i for i, l in enumerate(pred_labels)}
+    true_index = {l: i for i, l in enumerate(true_labels)}
+
+    C = np.zeros((len(pred_labels), len(true_labels)), dtype=np.int64)
+    for p, t in zip(y_pred, y_true):
+        C[pred_index[p], true_index[t]] += 1
+    cost_matrix = -C
+
+    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+
+    mapping = {pred_labels[r]: true_labels[c] for r, c in zip(row_ind, col_ind)}
+
+    return mapping, C
+
+def get_supervised_metrics(true_labels_enc, predicted_labels, mapping = "greedy"):
+    if mapping == "greedy":
+        mapping = greedy_cluster_mapping(true_labels_enc, predicted_labels)
+    elif mapping == "hungarian":
+        mapping, contingency = hungarian_cluster_mapping(y_true=true_labels_enc,
+                                                 y_pred=predicted_labels)
+    aligned_predicted_labels = np.array([mapping[label] for label in predicted_labels])
+    accuracy = (aligned_predicted_labels == true_labels_enc).mean()
+    precision = precision_score(true_labels_enc, aligned_predicted_labels, average="macro", zero_division=0)
+    recall    = recall_score(true_labels_enc, aligned_predicted_labels, average="macro", zero_division=0)
+
+    return accuracy, precision, recall
 
 
-def find_best_parameters_supervised (algorithms_names, reduction_names, spectrograms_scaled,  num_trials, keys):
+def find_best_parameters_supervised (algorithms_names, reduction_names, spectrograms_scaled,  num_trials, keys, supervised = True):
     perplexity, n_neighbors, linkage, selection, min_cluster_size,  n_components, min_samples, min_dist   = None, None, None, None, None, None, None, None
     seeds = []
     metrics = [ "GTZAN", "Silhouette", "Seed", "CH", "Dunn"]
@@ -456,6 +507,8 @@ def find_best_parameters_supervised (algorithms_names, reduction_names, spectrog
                             sil = np.nan
                             labels_for_sil = np.asarray(predicted_labels)
                             mask = labels_for_sil != -1
+                            if supervised:
+                                acc, precision, recall = get_supervised_metrics(true_labels_enc, predicted_labels, mapping = mapping)
                             sil, ch, dunn = np.nan, np.nan, np.nan
                             cm = ClusteringMetric(X=spectrograms_reduced, y_pred=predicted_labels)
                             try:
@@ -479,6 +532,10 @@ def find_best_parameters_supervised (algorithms_names, reduction_names, spectrog
                             df.at[algorithm, (reduction, "Dunn")].append(
                                 f"{(dunn):.2f}" if not np.isnan(ch) else "nan"
                             )
+                            if supervised:
+                                df.at[f"{algorithm}", (reduction, "Accuracy")].append( "{:.2f}".format(acc*100))
+                                df.at[f"{algorithm}", (reduction, "Precision")].append( "{:.2f}".format(precision*100))
+                                df.at[f"{algorithm}", (reduction, "Recall")].append( "{:.2f}".format(recall*100))
                         else:
                             patience_dict[(algorithm, reduction)] = current_patience + 1
 
